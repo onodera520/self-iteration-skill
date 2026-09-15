@@ -1,0 +1,29 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local configuration and logs
+.env
+.env.*
+*.log
+*.part
+
+# Generated project material. Keep source examples in ai-storyboard-previs/assets.
+outputs/
+evidence/
+boards/
+delivery/
+demo/
+test-tools/
+validation-report.md
+tests/build_demo.py
+*.mp4
+*.webm
+*.mov
+
+# Operating-system files
+.DS_Store
+Thumbs.db

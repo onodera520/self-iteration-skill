@@ -1,0 +1,14 @@
+{
+  "id": "illustrative-profile-not-a-real-model",
+  "source": {"kind": "inference", "ref": "用于展示与测试的假设配置；未查询或选择真实模型，不可作为提交依据。"},
+  "max_images": 4,
+  "max_shots_per_group": 6,
+  "min_duration": 1,
+  "max_duration": 6,
+  "allowed_durations": null,
+  "aspect_ratios": ["16:9"],
+  "allow_multi_shot": true,
+  "max_fill_per_group": 1,
+  "video_cost_cny": 2,
+  "missing_anchor_cost_cny": 1
+}
