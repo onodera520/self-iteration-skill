@@ -19,6 +19,10 @@ class Base(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "project.json"
         self.p = core.read(ROOT / "ai-storyboard-previs/assets/example-project.json")
+        self.p["config"].pop("workflow", None)  # Legacy compatibility fixture.
+        self.p["config"].pop("video_source", None)
+        self.p.pop("user_video_prompt", None)
+        for g in self.p["groups"]: g.pop("video_prompt", None)
         self.profile = core.read(ROOT / "ai-storyboard-previs/assets/example-model-profile.json")
         self.p["config"]["video_input_mode"] = "anchors"
         self.profile["max_images"] = 3

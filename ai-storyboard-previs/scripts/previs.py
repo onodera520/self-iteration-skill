@@ -105,6 +105,7 @@ def validate(p, project_path):
     for g in p["groups"]:
         require(g["shot_ids"] and isinstance(g.get("version"), int) and g["version"] >= 1, "group version and shots required")
     c = p.get("config", {})
+    require(c.get("workflow") in (None, "video_evidence"), "invalid workflow")
     require(c.get("video_input_mode", "anchors") in ("assets", "anchors"), "invalid video input mode")
     for key, default in (("max_repair_rounds", 3), ("max_submissions", 0)):
         require(type(c.get(key, default)) is int and c.get(key, default) >= 0, key + " must be nonnegative integer")
@@ -138,7 +139,10 @@ def group_fingerprint(p, project_path, g):
         if a.get("path"):
             path = resolve(project_path, a["path"])
             a["sha256"] = sha(path) if path.is_file() else "MISSING"
-    return digest({"group": g, "shots": ss, "assets": asset_rows, "source": p["source_script"], "aspect_ratio": p.get("config", {}).get("aspect_ratio"), "video_input_mode": p.get("config", {}).get("video_input_mode", "anchors")})
+    binding = {"group": g, "shots": ss, "assets": asset_rows, "source": p["source_script"], "aspect_ratio": p.get("config", {}).get("aspect_ratio"), "video_input_mode": p.get("config", {}).get("video_input_mode", "anchors")}
+    if "user_video_prompt" in p:
+        binding["user_video_prompt"] = p["user_video_prompt"]
+    return digest(binding)
 
 
 def video_references(p, g):
@@ -149,6 +153,13 @@ def video_references(p, g):
 
 
 def prompt(p, gid):
+    g = group(p, gid)
+    supplied = g.get("video_prompt")
+    if supplied is None and len(p["groups"]) == 1:
+        supplied = p.get("user_video_prompt")
+    if supplied is not None or p.get("config", {}).get("workflow") == "video_evidence":
+        require(isinstance(supplied, str) and supplied.strip(), "user video prompt required; multiple generation groups need group.video_prompt")
+        return supplied + ("\n补充约束：" + g["prompt_notes"] if g.get("prompt_notes") else "")
     from requirements import contexts, target_text
     resolved = contexts(p)
     g = group(p, gid)
@@ -158,7 +169,7 @@ def prompt(p, gid):
         used = {aid for s in shots(p, g) for aid in s["asset_ids"]}
         for n, a in enumerate((a for a in p["assets"] if a["id"] in used), 1):
             lines.append(f"图片{n} → 资产 {a['id']}：{a['description']}。仅作为身份/外观/空间依据，不是一张图对应一个镜头。")
-        lines.append("视频用于提取分镜静帧；每镜保留清晰可选的构图和关键动作状态，全部镜头仍须依脚本出现。")
+        lines.append("视频将按原脚本校对并抽帧；每镜保留清晰的构图和关键状态，同时完整表现关键动作及结果，不得用静帧停留替代交接过程。全部镜头须按顺序出现。")
     n = 0
     for s in ([] if asset_mode else shots(p, g)):
         r = s["reference"]
@@ -188,6 +199,15 @@ def prompt(p, gid):
 
 def current_video(p, project_path, g, allow_old=False):
     fp = group_fingerprint(p, project_path, g)
+    if p.get("config", {}).get("video_source") == "imported":
+        candidates = [v for v in p.get("imported_videos", []) if v["target_id"] == g["id"]]
+        for v in reversed(candidates):
+            path = resolve(project_path, v["outputs"][0])
+            if (allow_old or (v["group_fingerprint"] == fp and v["version"] == g["version"])) and path.is_file() and sha(path) == v["output_hashes"][0]:
+                return v, path
+            if not allow_old:
+                return None, None  # A broken replacement cannot silently revive older evidence.
+        return None, None
     candidates = [t for t in p.get("tasks", {}).values() if t.get("kind") == "video" and t.get("target_id") == g["id"] and t.get("status") == "SUCCESS" and t.get("outputs")]
     current = [t for t in candidates if t.get("group_fingerprint") == fp and t.get("version") == g["version"]]
     for t in reversed(current or (candidates if allow_old else [])):
@@ -195,6 +215,62 @@ def current_video(p, project_path, g, allow_old=False):
         if f.is_file() and t.get("output_hashes", [None])[0] == sha(f):
             return t, f
     return None, None
+
+
+def import_video(p, project_path, gid, video):
+    """Register supplied media separately from paid task/submission accounting."""
+    from media import probe, duration
+    require(p.get("config", {}).get("video_source") == "imported", "set video_source: imported first")
+    g = group(p, gid)
+    path = Path(video).resolve()
+    require(path.is_file(), "input video required")
+    metadata = probe(path)
+    require(any(s.get("codec_type") == "video" for s in metadata["streams"]), "video stream required")
+    measured = duration(metadata)
+    require(number(measured) and measured > 0, "positive video duration required")
+    record = dict(target_id=gid, version=g["version"], source="user_video",
+                  group_fingerprint=group_fingerprint(p, project_path, g),
+                  outputs=[str(path)], output_hashes=[sha(path)], duration=measured)
+    p.setdefault("imported_videos", []).append(record)
+    return record
+
+
+def video_context(p, project_path, gid):
+    """One immutable group context, plus only the adjacent boundary shots."""
+    from storyboard import current_mapping, current_frame
+    from requirements import contexts
+    resolved = contexts(p)
+    g = group(p, gid)
+    task, path = current_video(p, project_path, g)
+    require(task, "current generated video required")
+    mapping = current_mapping(p, project_path, gid)
+    extraction = read(resolve(project_path, mapping["evidence_file"])) if mapping else None
+    rows = [{"shot_id": s["id"], "script": s["script"], "shot_size": s.get("shot_size"),
+             "requirements": resolved.get(s["id"]), "selected_frame": current_frame(p, project_path, s["id"])} for s in shots(p, g)]
+    used_assets = {aid for s in shots(p, g) for aid in s["asset_ids"]}
+    assets = [dict(a, sha256=sha(resolve(project_path, a["path"])) if a.get("path") and resolve(project_path, a["path"]).is_file() else "MISSING")
+              for a in p["assets"] if a["id"] in used_assets]
+    boundaries = []
+    index = p["groups"].index(g)
+    for n, edge in ((index-1, -1), (index+1, 0)):
+        if not 0 <= n < len(p["groups"]):
+            continue
+        other = p["groups"][n]
+        sid = other["shot_ids"][edge]
+        ot, op = current_video(p, project_path, other)
+        om = current_mapping(p, project_path, other["id"])
+        boundaries.append({"group_id": other["id"], "shot_id": sid,
+            "group_fingerprint": group_fingerprint(p, project_path, other),
+            "video_sha256": sha(op) if ot else None,
+            "requirements": resolved.get(sid),
+            "mapping": next(r for r in om["shots"] if r["shot_id"] == sid) if om else None})
+    result = {"group_id": gid, "version": g["version"], "video_sha256": sha(path),
+              "group_fingerprint": group_fingerprint(p, project_path, g), "video": str(path),
+              "duration": task.get("duration"), "assets": assets, "shots": rows, "mapping": mapping,
+              "extraction": extraction, "boundaries": boundaries}
+    result["context_fingerprint"] = digest(result)
+    result["previous_review"] = next((copy.deepcopy(r) for r in reversed(p.get("reviews", [])) if r["group_id"] == gid), None)
+    return result
 
 
 def review_current(p, project_path, gid):
@@ -211,6 +287,8 @@ def review_current(p, project_path, gid):
         version, fp = g["version"], group_fingerprint(p, project_path, g)
     for r in reversed(p.get("reviews", [])):
         if r["group_id"] == gid and r["version"] == version and r["video_sha256"] == sha(path) and r.get("fingerprint") == fp and not r.get("stale"):
+            if r.get("context_fingerprint") and (gid == "__delivery__" or r["context_fingerprint"] != video_context(p, project_path, gid)["context_fingerprint"]):
+                return None
             return r
     return None
 
@@ -248,6 +326,13 @@ def record_review(p, project_path, r):
         version, fp, ids = g["version"], group_fingerprint(p, project_path, g), g["shot_ids"]
         duration = task.get("duration")
     require(r.get("version") == version and r.get("video_sha256") == sha(path), "review video/version mismatch")
+    evidence_mode = p.get("config", {}).get("workflow") == "video_evidence" or "reference_assessments" in r
+    ctx = None
+    if evidence_mode:
+        require(gid != "__delivery__", "video evidence review is per generation group")
+        ctx = video_context(p, project_path, gid)
+        require(r.get("context_fingerprint") == ctx["context_fingerprint"], "review context changed; reload group evidence")
+        require(ctx["mapping"] and ctx["extraction"], "review needs current extraction and mapping")
     checks = r.get("checks", {})
     require(set(checks) == {"shot", "continuity", "story", "subtitles"}, "all four review checks required")
     require(all(v in ("PASS", "FAIL", "uncertain") for v in checks.values()), "invalid verdict")
@@ -269,7 +354,31 @@ def record_review(p, project_path, r):
     failed = "FAIL" in checks.values()
     require(not failed or issues, "FAIL needs actionable evidence-backed issue")
     passing = all(v == "PASS" for v in checks.values())
+    if ctx:
+        frames = {str(resolve(project_path, f["path"])): f for f in ctx["extraction"]["frames"]}
+        for e in evidence:
+            frame = frames.get(str(resolve(project_path, e.get("path", ""))))
+            require(frame and frame["sha256"] == e.get("sha256") and abs(frame["time"] - e["time"]) < .001,
+                    "review evidence must bind an unchanged extracted frame and actual time")
+        assessments = r.get("reference_assessments", [])
+        require([a.get("shot_id") for a in assessments] == ids, "reference assessments must cover group in order")
+        for a in assessments:
+            require(a.get("decision") in ("anchor", "ai_fill", "pending") and a.get("reason"), "reference decision and reason required")
+            times = a.get("evidence_times", [])
+            require(times and all(any(e["shot_id"] == a["shot_id"] and e["time"] == t for e in evidence) for t in times), "reference assessment needs same-shot evidence")
+        boundary_checks = r.get("boundary_checks", [])
+        require([b.get("shot_id") for b in boundary_checks] == [b["shot_id"] for b in ctx["boundaries"]], "all adjacent boundary checks required")
+        for b, source in zip(boundary_checks, ctx["boundaries"]):
+            require(b.get("verdict") in ("PASS", "FAIL", "uncertain") and b.get("observation"), "boundary observation required")
+            if b["verdict"] == "PASS":
+                require(source["mapping"] and source["mapping"]["status"] == "matched", "boundary PASS needs matched neighboring evidence")
+                require(source["requirements"] and source["requirements"]["ready"], "boundary PASS needs ready requirements")
+            require(b["verdict"] != "FAIL" or checks["continuity"] == "FAIL", "boundary failure must fail continuity")
+            require(b["verdict"] != "uncertain" or checks["continuity"] != "PASS", "uncertain boundary cannot pass continuity")
     if passing:
+        if ctx:
+            require(all(s["requirements"] and s["requirements"]["ready"] for s in ctx["shots"]), "ready requirements required for video PASS")
+            require(all(s["status"] == "matched" for s in ctx["mapping"]["shots"]), "PASS needs all shots matched")
         require(not r.get("uncertainties") and not coverage["limitations"], "uncertain evidence cannot PASS")
         require(not any(i["severity"] != "low" for i in issues), "unresolved substantial issue cannot PASS")
         require(coverage.get("mapping_verified") is True and {e["shot_id"] for e in evidence} == set(ids), "PASS needs verified mapping and every-shot evidence")
@@ -280,6 +389,10 @@ def record_review(p, project_path, r):
             require(number(s.get("start")) and number(s.get("end")) and abs(s["start"] - last) <= .1 and s["end"] > s["start"], "invalid actual shot timing")
             last = s["end"]
         require(duration and abs(last - duration) <= .15, "PASS needs probed duration and complete actual timing")
+        if ctx:
+            for span in spans:
+                require(any(e["shot_id"] == span["shot_id"] and span["start"] <= e["time"] < span["end"] for e in evidence),
+                        "PASS needs evidence inside each actual shot span")
     r = copy.deepcopy(r)
     r.update(fingerprint=fp, verdict="FAIL" if failed else ("PASS" if passing else "uncertain"), id=uuid.uuid4().hex)
     p.setdefault("reviews", []).append(r)
@@ -315,6 +428,9 @@ def split(p, gid, before):
     a, b = copy.deepcopy(g), copy.deepcopy(g)
     a.update(id=gid + "_a", shot_ids=g["shot_ids"][:n])
     b.update(id=gid + "_b", shot_ids=g["shot_ids"][n:])
+    # Parent wording covers a different interval; never submit it for both children.
+    for child in (a, b):
+        child.pop("video_prompt", None)
     index = p["groups"].index(g)
     p["groups"][index:index+1] = [a, b]
     p["repairs"][-1].setdefault("splits", []).append({"from": gid, "to": [a["id"], b["id"]]})
@@ -337,11 +453,12 @@ def render(p, project_path, out):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("validate", "prompt", "render", "review", "repair", "split", "restore"):
+    for name in ("validate", "prompt", "context", "render", "review", "repair", "split", "restore", "import-video"):
         q = sub.add_parser(name)
         q.add_argument("project")
-        if name in ("prompt", "split"):
+        if name in ("prompt", "context", "split", "import-video"):
             q.add_argument("group")
+        if name == "import-video": q.add_argument("video")
         if name == "split": q.add_argument("before")
         if name == "render": q.add_argument("output")
         if name == "review": q.add_argument("review_file")
@@ -352,11 +469,13 @@ def main():
             q.add_argument("shot")
             q.add_argument("--reason", required=True)
     args = ap.parse_args()
-    mutation = args.cmd in ("review", "repair", "split", "restore")
+    mutation = args.cmd in ("review", "repair", "split", "restore", "import-video")
     with locked(args.project) if mutation else contextlib.nullcontext():
         p = read(args.project)
         result = validate(p, args.project)
         if args.cmd == "prompt": result = prompt(p, args.group)
+        if args.cmd == "import-video": result = import_video(p, args.project, args.group, args.video)
+        if args.cmd == "context": result = video_context(p, args.project, args.group)
         if args.cmd == "render": result = render(p, args.project, args.output)
         if args.cmd == "review": result = record_review(p, args.project, read(args.review_file))
         if args.cmd == "repair": repair(p, args.project, args.groups, args.reason)

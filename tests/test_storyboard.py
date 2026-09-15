@@ -20,6 +20,10 @@ class StoryboardTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "project.json"
         self.p = core.read(ROOT / "ai-storyboard-previs/assets/example-project.json")
+        self.p["config"].pop("workflow", None)  # Legacy image workflow remains supported.
+        self.p["config"].pop("video_source", None)
+        self.p.pop("user_video_prompt", None)
+        for g in self.p["groups"]: g.pop("video_prompt", None)
         self.profile = core.read(ROOT / "ai-storyboard-previs/assets/example-model-profile.json")
         for n, asset in enumerate(self.p["assets"]):
             asset["path"] = self.png(asset["id"], (20+n*40, 70, 90)).name

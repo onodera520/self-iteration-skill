@@ -1,43 +1,41 @@
 ---
 name: ai-storyboard-previs
-description: 根据资产图和有序脚本生成快速切镜视频作为取图素材，匹配抽帧、审查并局部修图补图，最终交付分镜图片和清晰的 Markdown 说明。用于 AI 分镜图制作、视频取图和分镜连续性检查。
+description: 根据用户提供的视频、脚本和资产图，抽帧匹配并审查人物、场景、道具、动作与连续性，再提出相邻分镜聚合和 ai_fill 省图建议，交付保留抽帧与简洁 Markdown。用于已有视频的分镜校对、聚合规划和参考图取舍。
 ---
 
-# AI 分镜图制作
+# 视频实证分镜规划
 
-最终目标是分镜图与 `分镜说明.md`。视频只是批量获得候选画面的中间素材，不交付视频，不要求修好的图片回流重做视频。
+默认输入：**视频＋脚本＋资产图**。
 
-## 工作流程
+默认链路：**登记视频 → 抽帧对应脚本 → 组级内容与连续性审查 → 相邻聚合与参考图取舍 → 保留图片＋简洁 MD**。不需要视频提示词，不进入 API 生成或独立修图流程。
 
-1. **整理资产与脚本**：读 [内部数据与交付](references/project.md)，以示例建立内部工作文件。保留原镜头编号、顺序、剧情、用户时长和画幅。默认每镜需要最终分镜图；生成输入参考图的省略与最终不配图是两种独立决定。
-2. **定稿镜头要求并分组生成**：读 [镜头要求](references/shot-requirements.md)，明确每镜目的、取图阶段、动作前后状态及必要画面约束。生成、取图、修图和验收共用该设计；提示词优化不得暗改设计。再读 [分组规则](references/planning.md) 与 [事实约束](references/facts-and-planner.md)。默认 `video_input_mode: assets`，直接用资产图生成，不先为每镜补一张输入图。按模型图片数和时长限制划分相邻镜头；模型和预算确定后依 [生成与恢复](references/generation.md) 调用 RunningHub。先试一个多镜头组，再扩展其余组。
-3. **匹配与抽帧**：依 [匹配、审查与修复](references/review.md) 对照脚本定位实际画面。每镜保留多个候选帧与实际时间，再选最能表达构图和关键状态的一张。抽不到先回看原视频并加密抽帧；分别记录匹配、确认缺失和不确定，不强行配对。
-4. **检查分镜图**：以脚本、资产及已定稿的目标关键帧为准检查人物、场景、道具、构图、动作阶段、画面清晰度与连续性。区分世界位置、画面左右与角色自身手别，画外状态继续保留。抽帧或接口成功不等于通过。图中看不出的完整运动不声称验证；一镜需要多个关键状态时可补充图片，并保持同一原镜头编号。
-5. **局部修复**：局部错误编辑图片；必要图缺失或整体图意错误时单独补图。重新抽帧能解决的先重新匹配。视频组整体失配、单图修复不合适时，说明原因后只重生成相关组。根据错误严重程度、范围及成本决定，不只用 bad_num 阈值。修完图复查该镜及相邻图，不要求中间视频修好。通过的图片保留。
-6. **交付**：按原顺序检查全部最终图片及故事可读性，再用 render 输出 Markdown 与图片附件。每镜展示分镜图、脚本、计划时长与必要状态。无需单独配图必须有剧情及前后画面的依据，保留编号与脚本。不附项目清单、规划/审查记录、取图视频或 HTML。
+## 默认执行流程
 
-默认最多三轮付费返修，受本次预算和提交上限约束；每批受影响镜头计一轮，重新匹配不消耗生成轮次。只有确认失败或确认缺失的必要图触发付费返修；不确定先补证据。到上限保留最佳可用图片并说明剩余问题。任务超时继续查原 ID，禁止直接重复提交。
+1. **一次整理输入**：读 [项目约定](references/project.md)、[镜头要求](references/shot-requirements.md)。依据完整脚本与资产一次填写全部 facts/state_changes/requirements/块级 provenance。只写入口种子和 state_changes，完整状态由 requirements.py 计算。视频画面是待核对证据，不能用错误画面改写脚本要求。保留原镜号、顺序、剧情、时长及画幅。
+2. **登记已有视频**：设置 workflow: video_evidence、video_source: imported。一份视频对应一个来源组，包含它应覆盖的连续脚本镜头；这不是最终聚合方案。使用 import-video 保存文件哈希与实测时长，不伪造生成任务、不计付费提交。资产图用于身份、外观、场景和道具比对，不上传。脚本没有镜头时长时先用估算区间辅助抽样，不能把估算当成真实对应时间。
+3. **一次批量匹配**：按 [审查规则](references/review.md) 抽取镜头内部、切点前后和连续帧，整组匹配脚本。记录候选、实际时间、SHA256 和 observation；同哈希观察复用。matched 仅表示定位成功；uncertain 先回看或加密抽帧；absent 必须完整补查确认。
+4. **一次组级审查并给出取舍依据**：previs.py context 一次读取整组要求、资产、候选帧、选帧和相邻组边界。一次判断人物、场景、道具、动作及结果、镜头顺序、必要切镜、字幕与连续性，同时填写全组 reference_assessments；一次 review 登记。禁止逐镜 context/review。composition 仅比对脚本明确景别及关键帧要求与已记录描述。稀疏抽帧不能确认的动作或转场标待检查，不宣称完整通过。
+5. **补查与问题处理**：证据不足先补查；确认内容错误或漏镜则定位镜号、时间和修改建议，保留有效结果并标待检查。本流程不自动付费重生成、修图或补图。用户给出替换视频后重新 import-video，整份替换视频重新匹配审查，并复查左右来源组边界；其他有效结果复用。
+6. **工具聚合并交付**：按 [规划规则](references/planning.md) 运行 planner.py --post-review，保存独立 aggregation，不覆盖来源组、视频或时间映射。仅组合相邻镜头，保护首尾、首次出场、关键状态、空间变化和必要锚点；ai_fill 须处于可靠锚点之间。render 输出保留抽帧和分镜说明.md，逐镜列原编号、脚本、图或占位、简短理由；问题注明待检查。不交付视频、HTML 或内部记录。
+
+ai_fill 只省独立参考图，不能删除原脚本镜头。漏镜、不确定及画面错误不批准省图。默认是**有实证依据的省图建议，未验证**：已有视频成功不证明后续采用新聚合及参考图组合也成功。
+
+事实来源分级、SHA256、.lock、观察复用规则保持。旧生成模式的预算、max_retries=1、三轮上限及 submission_unknown 恢复逻辑保留兼容；仅在用户另行要求生成时读取 [生成与恢复](references/generation.md)，不进入默认流程。不实现 CLIP，不并发。
 
 ## 工具入口
 
-Python 3.10+，图片文件验证需要 Pillow，抽帧需要 FFmpeg/FFprobe。模型参数使用本机 runninghub 技能的注册表和客户端。
+Python 3.10+、Pillow、FFmpeg/FFprobe。项目、证据、规划配置均在内部工作目录；用户不必填写 JSON。
 
 ```text
 python scripts/previs.py validate PROJECT.json
-python scripts/planner.py PROJECT.json PROFILE.json --output PLAN.json --apply
-python scripts/previs.py prompt PROJECT.json G01
-python scripts/rh_tasks.py dry-run PROJECT.json REQUEST.json
-python scripts/rh_tasks.py run PROJECT.json REQUEST.json
-python scripts/rh_tasks.py resume PROJECT.json REQUEST_ID
-python scripts/media.py extract VIDEO.mp4 EVIDENCE_DIR --project PROJECT.json --group G01
+python scripts/previs.py import-video PROJECT.json G01 INPUT.mp4
+python scripts/media.py extract INPUT.mp4 EVIDENCE_DIR --project PROJECT.json --group G01
 python scripts/storyboard.py map PROJECT.json MAPPING.json
 python scripts/storyboard.py select PROJECT.json SELECTION.json
-python scripts/storyboard.py restore PROJECT.json RESTORE.json
-python scripts/storyboard.py context PROJECT.json S01
-python scripts/storyboard.py review PROJECT.json IMAGE_REVIEW.json
-python scripts/storyboard.py repair PROJECT.json REPAIR_BATCH.json
-python scripts/storyboard.py omit PROJECT.json OMISSION.json
+python scripts/previs.py context PROJECT.json G01
+python scripts/previs.py review PROJECT.json GROUP_REVIEW.json
+python scripts/planner.py PROJECT.json PROFILE.json --post-review --output AGGREGATION.json
 python scripts/previs.py render PROJECT.json DELIVERY_DIR
 ```
 
-代理负责实际读图、比对脚本、选择修复方式并连续执行；脚本负责文件绑定、版本、状态、限额与输出，不是自动视觉分类器。模拟接口、合成视频与构图示意只验证工具流程；真实模型生成和修图效果需实际验收。
+PROFILE 是聚合约束，未指定下游模型时采用明确标注的规划假设，不查询或选定生成模型。详见 [事实与规划](references/facts-and-planner.md)。正常三镜组仍设计为 3 次 LLM 判断：完整提取、批量匹配、组级审查与取舍；工具完成登记、抽帧、规划和渲染。这不是实测耗时，补查时以审查质量为先。

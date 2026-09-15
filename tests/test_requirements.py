@@ -20,6 +20,10 @@ class RequirementsTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "project.json"
         self.p = core.read(ROOT / "ai-storyboard-previs/assets/example-project.json")
+        self.p["config"].pop("workflow", None)  # Test legacy image request compatibility.
+        self.p["config"].pop("video_source", None)
+        self.p.pop("user_video_prompt", None)
+        for g in self.p["groups"]: g.pop("video_prompt", None)
         for a in self.p["assets"]:
             a["path"] = str(self.path.parent / (a["id"] + ".png"))
             Image.new("RGB", (32, 32), "red").save(a["path"])

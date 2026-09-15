@@ -512,11 +512,13 @@
     }
   ],
   "config": {
+    "workflow": "video_evidence",
     "aspect_ratio": "16:9",
     "max_repair_rounds": 3,
     "max_submissions": 0,
     "delivery_mode": "storyboard_images",
-    "video_input_mode": "assets"
+    "video_input_mode": "assets",
+    "video_source": "imported"
   },
   "tasks": {},
   "reviews": [],

@@ -1,4 +1,4 @@
 interface:
-  display_name: "AI 分镜图制作"
-  short_description: "从资产与脚本生成取图视频，匹配抽帧并修图补图，交付分镜图片和易读的 Markdown 说明"
-  default_prompt: "使用 $ai-storyboard-previs 根据我的资产图和脚本制作分镜图，视频只用于取图，最终交付图片和 Markdown。"
+  display_name: "视频实证分镜规划"
+  short_description: "校对用户视频、脚本与资产图，提出分镜聚合和省图建议，交付图片与 Markdown"
+  default_prompt: "使用 $ai-storyboard-previs 校对我提供的视频、脚本和资产图，完成抽帧匹配、连续性审查、相邻聚合与 ai_fill 建议，只交付保留图片和简洁 Markdown。"

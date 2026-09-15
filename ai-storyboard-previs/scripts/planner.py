@@ -6,7 +6,8 @@ from decimal import Decimal
 import itertools
 from pathlib import Path
 import sys
-from previs import read, save, locked, validate, require, number, digest, resolve
+from previs import (read, save, locked, validate, require, number, digest, resolve,
+                    group_fingerprint, current_video, video_context, review_current)
 
 RULES = {
     "FIRST_IN_GROUP": "每组首镜提供进入条件",
@@ -189,7 +190,7 @@ def options(p, project_path, profile, analysis, start, end):
         if len(anchors) > profile["max_images"] or fill > profile["max_fill_per_group"]:
             continue
         missing = sum(not p["shots"][n]["reference"].get("path") or not resolve(project_path, p["shots"][n]["reference"]["path"]).is_file() for n in anchors)
-        cost = Decimal(str(profile["video_cost_cny"])) + missing * Decimal(str(profile["missing_anchor_cost_cny"]))
+        cost = Decimal(str(profile["video_cost_cny"])) + (0 if p.get("_post_review") else missing) * Decimal(str(profile["missing_anchor_cost_cny"]))
         result.append({"start": start, "end": end, "duration": float(length), "anchors": sorted(anchors), "fill_count": fill, "missing_count": missing, "cost": cost})
     return result
 
@@ -216,8 +217,10 @@ def plan(p, project_path, profile):
                 old, chain = best[start]
                 signature = old[4] + ((end, tuple(option["anchors"])),)
                 # Hard rules + low-risk eligibility gate precede optimization.
-                # Cost, then fill exposure, then image count, then task count; stable tie-break.
-                score = (old[0]+option["cost"], old[1]+option["fill_count"], old[2]+len(option["anchors"]), old[3]+1, signature)
+                # Legacy: cost, fill exposure, image count. Post-review: cost, retained
+                # image count, fill exposure, after the evidence/mandatory-anchor gates.
+                a, b = (len(option["anchors"]), option["fill_count"]) if p.get("_post_review") else (option["fill_count"], len(option["anchors"]))
+                score = (old[0]+option["cost"], old[1]+a, old[2]+b, old[3]+1, signature)
                 if best[end] is None or score < best[end][0]:
                     best[end] = (score, chain+[option])
     require(best[count] is not None, "no feasible ordered plan: check asset/reference counts, same-scene boundaries, exact durations and model limits; shots were not removed")
@@ -230,7 +233,7 @@ def plan(p, project_path, profile):
             s = p["shots"][j]
             if p.get("config", {}).get("video_input_mode") == "assets":
                 decisions.append({"shot_id": s["id"], "group_id": gid, "mode": s["reference"]["mode"],
-                                  "reason": "直接以资产图生成候选视频；最终分镜图独立选择与检查。"})
+                                  "reason": "仅按模型约束试生成；抽帧审查后再确定聚合与省图建议。"})
                 continue
             rules = list(analysis[j]["mandatory_rules"])
             if j == opt["start"]: rules.append("FIRST_IN_GROUP")
@@ -253,6 +256,100 @@ def plan(p, project_path, profile):
     return result
 
 
+def aggregation_fingerprint(p, project_path, profile):
+    from storyboard import current_frame
+    rows = []
+    for g in p["groups"]:
+        task, _ = current_video(p, project_path, g)
+        ctx = video_context(p, project_path, g["id"]) if task else None
+        r = review_current(p, project_path, g["id"])
+        rows.append([g["id"], group_fingerprint(p, project_path, g),
+                     ctx["context_fingerprint"] if ctx else None, r,
+                     [current_frame(p, project_path, sid) for sid in g["shot_ids"]]])
+    return digest([input_fingerprint(p, project_path, profile), rows])
+
+
+def current_aggregation(p, project_path):
+    result = p.get("aggregation")
+    return result if result and result.get("evidence_fingerprint") == aggregation_fingerprint(p, project_path, result["profile"]) else None
+
+
+def post_review_plan(p, project_path, profile):
+    """Replan a copy: never replace actual task groups or promote suggestions to proof."""
+    from storyboard import current_frame, mapping_row
+    validate(p, project_path)
+    profile_validate(profile)
+    working = copy.deepcopy(p)
+    working["config"]["video_input_mode"] = "anchors"
+    working["_post_review"] = True
+    states = {}
+    for g in p["groups"]:
+        r = review_current(p, project_path, g["id"])
+        assessments = {a["shot_id"]: a for a in (r or {}).get("reference_assessments", [])}
+        for sid in g["shot_ids"]:
+            row, frame = mapping_row(p, project_path, sid), current_frame(p, project_path, sid)
+            a = assessments.get(sid)
+            ready = bool(r and r.get("context_fingerprint") and r["verdict"] == "PASS"
+                         and row and row["status"] == "matched" and frame and a and a["decision"] != "pending")
+            problems = [i["problem"] for i in (r or {}).get("issues", []) if sid in i["shot_ids"]]
+            states[sid] = {"ready": ready, "assessment": a, "source_group_id": g["id"], "frame": frame,
+                           "reason": a["reason"] if ready else ("待检查：" + "；".join(problems) if problems else "当前视频、匹配、选帧或审查尚未通过，待检查；不批准省图。")}
+    for s in working["shots"]:
+        state = states[s["id"]]
+        a = state["assessment"]
+        s["reference"]["path"] = state["frame"]["path"] if state["frame"] else None
+        # The observation is an inference about omission, never an upgrade of sourced facts.
+        s["omission_assessment"] = {"allowed": bool(state["ready"] and a["decision"] == "ai_fill"),
+            "risk": "low" if state["ready"] and a["decision"] == "ai_fill" else "unknown",
+            "rationale": state["reason"], "source": {"kind": "inference", "ref": "当前视频组级审查：" + state["source_group_id"]}}
+    try:
+        result = plan(working, project_path, profile)
+        feasible = True
+    except ValueError as exc:
+        if not str(exc).startswith("no feasible ordered plan"):
+            raise
+        # Keep every shot visible even when model limits prevent an anchor proposal.
+        result = {"groups": copy.deepcopy(p["groups"]), "decisions": [
+            {"shot_id": sid, "group_id": g["id"], "mode": "anchor", "rules": [], "bracket": None}
+            for g in p["groups"] for sid in g["shot_ids"]]}
+        feasible = False
+    for n, g in enumerate(result["groups"], 1):
+        g["id"] = f"A{n:02d}"
+        g["source_group_ids"] = list(dict.fromkeys(states[sid]["source_group_id"] for sid in g["shot_ids"]))
+        for d in result["decisions"]:
+            if d["shot_id"] not in g["shot_ids"]:
+                continue
+            state = states[d["shot_id"]]
+            d["group_id"] = g["id"]
+            d["source_group_id"] = state["source_group_id"]
+            d["frame"] = copy.deepcopy(state["frame"])
+            if not state["ready"]:
+                d.update(mode="pending", status="pending", bracket=None, reason=state["reason"])
+            else:
+                d["status"] = "ai_fill_suggested_unverified" if d["mode"] == "ai_fill" else "anchor_reviewed"
+                d["reason"] = state["reason"] + ("；" + d.get("reason", "") if d["mode"] == "anchor" else "；前后锚点承接，省图效果尚未验证。")
+    # No fill may depend on a pending/missing bracket, including a failed adjacent group.
+    by_id = {d["shot_id"]: d for d in result["decisions"]}
+    for d in result["decisions"]:
+        if d["mode"] == "ai_fill" and any(by_id[sid]["status"] != "anchor_reviewed" for sid in d["bracket"].values()):
+            d.update(mode="anchor", status="anchor_reviewed", bracket=None, reason="前后必要锚点尚未通过，保留此图。")
+    result.update(profile=copy.deepcopy(profile), stage="post_review", feasible=feasible,
+        evidence_fingerprint=aggregation_fingerprint(p, project_path, profile),
+        limitations=["聚合与 ai_fill 是建议，未专项试生成，不代表省图已验证。"] + ([] if feasible else ["模型约束下没有可行参考图方案；保留试生成分组展示，需调整模型配置后重规划。"]),
+        objective={"anchor_count": sum(d["mode"] == "anchor" for d in result["decisions"]),
+                   "fill_count": sum(d["mode"] == "ai_fill" for d in result["decisions"]),
+                   "pending_count": sum(d["mode"] == "pending" for d in result["decisions"]),
+                   "group_count": len(result["groups"])})
+    return result
+
+
+def store_aggregation(p, project_path, result):
+    require(result.get("stage") == "post_review" and result["evidence_fingerprint"] == aggregation_fingerprint(p, project_path, result["profile"]), "aggregation evidence changed")
+    if p.get("aggregation"):
+        p.setdefault("aggregation_history", []).append(copy.deepcopy(p["aggregation"]))
+    p["aggregation"] = copy.deepcopy(result)
+
+
 
 def apply_plan(p, project_path, result):
     require(not p.get("tasks") and not p.get("reviews") and not p.get("board_reviews") and not p.get("repair_round", 0) and not p.get("delivery") and not any(s.get("board") for s in p["shots"]), "initial planning only; preserve generated projects and use local repair")
@@ -271,14 +368,19 @@ def main():
     ap.add_argument("profile")
     ap.add_argument("--output", required=True)
     ap.add_argument("--apply", action="store_true", help="Apply only to an ungenerated project")
+    ap.add_argument("--post-review", action="store_true", help="Save evidence-backed aggregation separately; never change task groups")
     args = ap.parse_args()
     with locked(args.project):
         p = read(args.project)
-        result = plan(p, args.project, read(args.profile))
+        require(not (args.post_review and args.apply), "post-review cannot apply over generation groups")
+        result = (post_review_plan if args.post_review else plan)(p, args.project, read(args.profile))
         require(Path(args.output).resolve() != Path(args.project).resolve(), "plan output must not overwrite project")
         save(args.output, result)
         if args.apply:
             apply_plan(p, args.project, result)
+            save(args.project, p)
+        if args.post_review:
+            store_aggregation(p, args.project, result)
             save(args.project, p)
         print(result["objective"])
 

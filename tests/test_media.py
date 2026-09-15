@@ -20,6 +20,10 @@ class MediaTests(unittest.TestCase):
         cls.root = Path(cls.tmp.name)
         cls.path = cls.root / "project.json"
         cls.p = previs.read(ROOT / "ai-storyboard-previs/assets/example-project.json")
+        cls.p["config"].pop("workflow", None)  # Existing image-delivery regression tests.
+        cls.p["config"].pop("video_source", None)
+        cls.p.pop("user_video_prompt", None)
+        for g in cls.p["groups"]: g.pop("video_prompt", None)
         for i, g in enumerate(cls.p["groups"]):
             path = cls.root / (g["id"] + ".mp4")
             color = "red" if i == 0 else "blue"

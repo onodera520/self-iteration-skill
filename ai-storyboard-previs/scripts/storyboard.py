@@ -122,18 +122,40 @@ def record_mapping(p, project, data):
             c["sha256"] = sha(path)
     item = copy.deepcopy(data)
     item["group_fingerprint"] = group_fingerprint(p, project, g)
+    item["evidence_sha256"] = sha(resolve(project, data["evidence_file"]))
     p.setdefault("board_mappings", []).append(item)
 
 
-def mapping_row(p, project, sid):
-    g = next(g for g in p["groups"] if sid in g["shot_ids"])
+def current_mapping(p, project, gid):
+    g = group(p, gid)
     task, video = current_video(p, project, g)
     if not task:
         return None
     fp = group_fingerprint(p, project, g)
     for m in reversed(p.get("board_mappings", [])):
         if m["group_id"] == g["id"] and m["group_fingerprint"] == fp and m["video_sha256"] == sha(video):
-            return next(r for r in m["shots"] if r["shot_id"] == sid)
+            evidence_path = resolve(project, m["evidence_file"])
+            if not evidence_path.is_file() or (m.get("evidence_sha256") and sha(evidence_path) != m["evidence_sha256"]):
+                return None
+            evidence = read(evidence_path)
+            if any(not resolve(project, f["path"]).is_file() or sha(resolve(project, f["path"])) != f["sha256"] for f in evidence["frames"]):
+                return None
+            return m
+    return None
+
+
+def mapping_row(p, project, sid):
+    g = next(g for g in p["groups"] if sid in g["shot_ids"])
+    mapping = current_mapping(p, project, g["id"])
+    return next(r for r in mapping["shots"] if r["shot_id"] == sid) if mapping else None
+
+
+def current_frame(p, project, sid):
+    item, row = selected(p, project, sid), mapping_row(p, project, sid)
+    if item and item["source"]["kind"] == "frame" and row and row["status"] == "matched":
+        if any(resolve(project, c["path"]) == resolve(project, item["path"]) and c["sha256"] == item["sha256"]
+               and c["time"] == item["source"].get("time") for c in row["candidates"]):
+            return item
     return None
 
 
@@ -246,6 +268,8 @@ def repair(p, project, data):
 
 def render(p, project, out):
     validate(p, project)
+    if p.get("config", {}).get("workflow") == "video_evidence" or "aggregation" in p:
+        return render_aggregation(p, project, out)
     out = Path(out).resolve()
     # A reused old video delivery folder must not silently leak legacy deliverables.
     allowed = {".md"} | IMAGE_SUFFIXES
@@ -297,6 +321,78 @@ def render(p, project, out):
             lines += ["待补图" if not s.get("board", {}).get("selected") else "图片已变化或缺失，待重新检查", ""]
     if notes:
         lines += ["## 需要留意", ""] + ["- " + esc(x) for x in dict.fromkeys(notes)] + [""]
+    path = out / "分镜说明.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return str(path)
+
+
+def render_aggregation(p, project, out):
+    from planner import current_aggregation
+    proposal = current_aggregation(p, project)
+    groups = proposal["groups"] if proposal else p["groups"]
+    decisions = {d["shot_id"]: d for d in proposal["decisions"]} if proposal else {}
+    chosen = {}
+    for s in p["shots"]:
+        sid = s["id"]
+        if decisions.get(sid, {}).get("mode") == "ai_fill":
+            continue
+        item = current_frame(p, project, sid)
+        historical = False
+        if not item:
+            # Best retained older frame can be shown, but never carries current acceptance.
+            board = s.get("board", {})
+            for old in [board.get("selected")] + list(reversed(board.get("history", []))):
+                if not old or old["source"].get("kind") != "frame":
+                    continue
+                path = resolve(project, old["path"])
+                if not path.is_file() or sha(path) != old["sha256"]:
+                    continue
+                if any(row["shot_id"] == sid and any(resolve(project, c["path"]) == path and c["sha256"] == old["sha256"]
+                       and c["time"] == old["source"].get("time") for c in row.get("candidates", []))
+                       for m in p.get("board_mappings", []) for row in m["shots"]):
+                    item, historical = old, True
+                    break
+        if item:
+            chosen[sid] = (item, historical)
+    out = Path(out).resolve()
+    names = {sid: "images/" + sid + "-" + item["sha256"][:12] + Path(item["path"]).suffix.lower()
+             for sid, (item, _) in chosen.items()}
+    expected = {"分镜说明.md", *names.values()}
+    require(not out.exists() or all(f.relative_to(out).as_posix() in expected for f in out.rglob("*") if f.is_file()),
+            "choose a new delivery folder to preserve previous files and exclude internal records")
+    out.mkdir(parents=True, exist_ok=True)
+    def esc(value):
+        text = html.escape(str(value), quote=False).replace("\\", "\\\\")
+        for char in "|`*[]_#":
+            text = text.replace(char, "\\" + char)
+        return " ".join(text.splitlines())
+    lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜，计划总时长 {sum(s['duration'] for s in p['shots']):g} 秒。", "",
+             "ai_fill 表示建议省略独立参考图，脚本镜头仍保留；省图效果尚未专项验证。", ""]
+    if not proposal:
+        lines += ["聚合建议尚未生成或依据已变化，以下按试生成分组展示，均需检查。", ""]
+    elif not proposal["feasible"]:
+        lines += ["当前模型约束下没有可行聚合方案；以下沿用试生成分组，待调整。", ""]
+    for g in groups:
+        lines += ["## " + esc(g["id"]) + " · " + "、".join(esc(sid) for sid in g["shot_ids"]), ""]
+        for sid in g["shot_ids"]:
+            s, decision = shot(p, sid), decisions.get(sid, {})
+            lines += [f"### {esc(sid)} · 计划 {s['duration']:g} 秒", "", esc(s["script"]), ""]
+            if decision.get("mode") == "ai_fill":
+                lines += ["**ai_fill · 建议省图，未验证**", "", esc(decision["reason"]), ""]
+                continue
+            if sid in chosen:
+                item, historical = chosen[sid]
+                source = image_path(project, item["path"])
+                dest = out / names[sid]
+                dest.parent.mkdir(exist_ok=True)
+                if source != dest:
+                    shutil.copy2(source, dest)
+                state = "历史抽帧 · 待检查" if historical else ("保留图 · 视频校对通过" if decision.get("status") == "anchor_reviewed" else "抽帧图 · 待检查")
+                lines += [f"![{esc(sid)}](<{names[sid]}>)", "", state, ""]
+            else:
+                lines += ["待检查：尚无可用的对应抽帧。", ""]
+            if decision.get("reason"):
+                lines += [esc(decision["reason"]), ""]
     path = out / "分镜说明.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return str(path)
