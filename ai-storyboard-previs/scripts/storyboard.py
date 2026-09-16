@@ -358,6 +358,13 @@ def thumbnail(source, destination, sid, label, warning=""):
     card.save(destination)
 
 
+def seconds(value, suggested=False):
+    if value is None:
+        return "待确定"
+    from decimal import Decimal
+    return format(Decimal(str(value)).normalize(), 'f') + " 秒" + ("（建议）" if suggested else "")
+
+
 def render_aggregation(p, project, out):
     from planner import current_aggregation
     proposal = current_aggregation(p, project)
@@ -403,17 +410,22 @@ def render_aggregation(p, project, out):
         return " ".join(text.splitlines())
     lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜。", "",
              "ai_fill 仅省独立参考图，脚本镜头仍保留；可推导不等于视频已生成该镜，省图效果未经生成验证。", ""]
+    if p.get("config", {}).get("video_source") == "imported":
+        lines += ["时长采用脚本计划值，每组不超过15秒；建议值单独标注。对白不作逐字或口型同步检查。", ""]
     if not proposal:
         lines += ["聚合建议尚未生成或依据已变化，以下按视频来源分组展示，需检查。", ""]
     elif not proposal["feasible"]:
-        lines += ["当前约束下没有可行聚合方案；以下沿用视频来源分组，待调整。", ""]
+        lines += ["聚合尚未完成；P 编号仅为待分组占位，不代表已符合15秒上限。", ""]
     from previs import review_current
     reviews = {g["id"]: review_current(p, project, g["id"]) for g in p["groups"]}
-    lines += ["## 分组结果", "", "| 分组编号 | 镜头顺序 | 简短分组理由 |", "| --- | --- | --- |"]
+    lines += ["## 分组结果", "", "| 分组编号 | 镜头顺序 | 总时长 | 简短分组理由 |", "| --- | --- | --- | --- |"]
     for g in groups:
-        lines.append(f"| {esc(g['id'])} | {' → '.join(esc(sid) for sid in g['shot_ids'])} | {esc(g.get('reason', '视频来源分组，待确认聚合。'))} |")
-    lines += ["", "## 逐镜审查与取舍", "", "| 分组 | 原镜号 | 脚本描述 | 小分镜图 | 检验结果 | 图片处理 | 推导依据镜号 | 问题或修改建议 |",
-              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+        total = seconds(g.get('planned_duration')) if proposal and proposal['feasible'] else '待规划'
+        if proposal and proposal['feasible'] and g.get('duration_has_suggestion'):
+            total += '（含建议值）'
+        lines.append(f"| {esc(g['id'])} | {' → '.join(esc(sid) for sid in g['shot_ids'])} | {total} | {esc(g.get('reason', '视频来源分组，待确认聚合。'))} |")
+    lines += ["", "## 逐镜审查与取舍", "", "| 分组 | 原镜号 | 镜头时长 | 脚本描述 | 小分镜图 | 检验结果 | 图片处理 | 推导依据镜号 | 问题或修改建议 |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for g in groups:
         for sid in g["shot_ids"]:
             s, decision = shot(p, sid), decisions.get(sid, {})
@@ -456,7 +468,12 @@ def render_aggregation(p, project, out):
             picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
             if source:
                 picture = f"[{picture}](<{names[sid]}>)"
-            lines.append(f"| {esc(g['id'])} | {esc(sid)} | {esc(s['script'])} | {picture} | {status} | {treatment} | {esc(basis)} | {esc(reason)} |")
+            timing = seconds(s.get('duration'), s.get('duration_source', {}).get('kind') == 'inference')
+            if s.get('duration') is not None and not s.get('duration_source') and p.get('config', {}).get('video_source') == 'imported':
+                timing += '（来源待确认）'
+            if s.get('duration', 0) and s['duration'] > 15 and p.get('config', {}).get('video_source') == 'imported':
+                reason += '；单镜超过15秒，需拆分或调整计划时长。'
+            lines.append(f"| {esc(g['id'])} | {esc(sid)} | {timing} | {esc(s['script'])} | {picture} | {status} | {treatment} | {esc(basis)} | {esc(reason)} |")
     for summary in (proposal or {}).get("missing_summary", []):
         if summary["regenerate"]:
             source_group = group(p, summary["source_group_id"])

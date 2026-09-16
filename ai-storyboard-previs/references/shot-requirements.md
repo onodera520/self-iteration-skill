@@ -36,7 +36,7 @@
 - `entry_state`：键为 `实体.属性` 的持久状态初值，例如 `key.holder: girl`、`girl.coat_worn: false`。只补充此前未定义属性，不能悄悄覆盖继承值。确有时间跳跃或状态重置时明确时间链与脚本依据。
 - 出口状态由入口加原有 `state_changes` 中有授权、有来源的变化计算，`before` 必须吻合。跨镜变化也要在所属动作镜中记录。不要另维护一份可随意填写的出口快照。道具唯一持有者与临时接触者分开；同一把钥匙交接中两只手接触不等于两把钥匙。
 - `keyframe.phase`：entry、action、exit。entry/exit 从对应持久状态取得，`keyframe.state` 可补充当时的画面位置、身体朝向、视线及遮挡；不得覆盖该阶段已知的持久状态。action 可描述中间接触等临时状态，不改出口。用画面阶段匹配，不把计划秒数当成实际视频时间。
-- `must_have/must_not_have`：只针对目标静帧，写具体风险。视频会注明它们只在目标时刻适用，完整动作仍来自脚本与状态变化。不要写泛化负面词库。单张关键帧不足以证明完整动作时查看同镜连续帧或视频，不通过补图代替动态证据。
+- `must_have/must_not_have`：只针对目标静帧，写具体风险。视频会注明它们只在目标时刻适用，完整动作仍来自脚本与状态变化。不要写泛化负面词库。默认不把对白原文、配音文本或对白口型同步写入验收条件；原脚本照原样保留，剧情含义可用于 purpose 和 event，明确画面动作仍须检查。单张关键帧不足以证明完整动作时查看同镜连续帧或视频，不通过补图代替动态证据。
 - `provenance`：默认每镜要求块一条，覆盖 purpose + keyframe + must_have/must_not_have，沿用上例合并 field 字符串，不逐字段标来源。status 仍为 observed/user_provided/script/assumed/unknown；source 用一句话写清本块依据。混合来源时在同一 source 内简述原文、资产观察及假设，块级 status 保守标为 unknown（有未解决内容）或 assumed（包含设计假设），不得把假设包装为 script/observed。observed 必须确实看过图片。仅放宽 requirements.provenance 的记录粒度；facts.source、state_changes.source、authorized 与事实来源分级完全不变。校验器验证结构，不验证来源真实性或自然语言语义。
 
 当前旧项目可不含 requirements；继续实做前一次补齐全部缺失的要求块。直接保留原项目和旧结果，新增要求会使受影响审查过期；先复查现有视频和帧证据是否能复用，不因过期自动付费重做。

@@ -27,7 +27,7 @@ class EventGroupingTests(fixtures.Base):
         s['requirements']['provenance'][0]['source'] = 'S02 同场景观察，无持物变化'
         self.p['source_script'] = ' '.join(s['id'] + ' ' + s['script'] for s in self.p['shots'])
         for s in self.p['shots']:
-            s.pop('duration')
+            s.update(duration=2,duration_source=dict(kind='script',ref='SIMULATED 2 seconds'))
         for i, a in enumerate(self.p['assets']):
             a['path'] = str(self.png(a['id'], (i*50, 60, 90)))
         self.events(['E01'] * 3)
@@ -36,6 +36,15 @@ class EventGroupingTests(fixtures.Base):
         for s, eid in zip(self.p['shots'], ids):
             s['event'] = dict(id=eid, summary=(summaries or {}).get(eid, '连续行动 ' + eid),
                               source=dict(kind='inference', ref='测试脚本事件分析 ' + s['id']))
+
+        for s in self.p['shots']:
+            s.setdefault('duration',2)
+            s.setdefault('duration_source',dict(kind='script',ref='SIMULATED planned seconds'))
+        self.p['narrative_plan']=dict(source=dict(kind='inference',ref='SIMULATED full plot'),
+            boundaries=[dict(before_shot_id=b['id'],merge_allowed=a['event']['id']==b['event']['id'],strength=2,
+                reason='连续行动' if a['event']['id']==b['event']['id'] else '独立事件或明确时空跳跃')
+                for a,b in zip(self.p['shots'],self.p['shots'][1:])],
+            safe_spans=[dict(shot_ids=[s['id'] for s in self.p['shots']],reason='SIMULATED whole interval complexity checked')])
 
     def mapping(self, gid='G01'):
         g = core.group(self.p, gid)
@@ -88,10 +97,12 @@ class EventGroupingTests(fixtures.Base):
         self.p['shots'][2]['script']='翌日同一地点，男孩已拿稳钥匙。'
         self.assertEqual(self.partitions(self.run_plan()),[['S01','S02'],['S03']])
 
-    def test_legacy_without_events_keeps_scene_boundary(self):
+    def test_legacy_without_events_can_review_but_cannot_finalize_new_groups(self):
         for s in self.p['shots']: s.pop('event')
         self.p['shots'][2]['scene_id']='outside'
-        self.assertEqual(self.partitions(self.run_plan()),[['S01','S02'],['S03']])
+        result=self.run_plan()
+        self.assertFalse(result['feasible'])
+        self.assertEqual(self.partitions(result),[['S01'],['S02'],['S03']])
 
     def test_event_schema_rejects_partial_or_untraceable_annotations(self):
         original=copy.deepcopy(self.p)
@@ -133,13 +144,18 @@ class EventGroupingTests(fixtures.Base):
                    'E02':'苏晴从看伞、望人到作出决定，完成犹豫过程',
                    'E03':'推门、到门外开伞并追出，构成连续行动'}
         self.events(['E01']*2+['E02']*4+['E03']*2,summaries)
+        self.p['shots'][0]['duration']=3
+        for edge in self.p['narrative_plan']['boundaries']:
+            edge.update(merge_allowed=True,strength=3 if edge['before_shot_id']=='S07' else 1)
+        self.p['narrative_plan']['safe_spans']=[dict(shot_ids=[s['id'] for s in self.p['shots'][2:]],reason='犹豫决定后立即追出，整段复杂度可控'),
+            dict(shot_ids=[s['id'] for s in self.p['shots'][:6]],reason='离开与第一时间反应，整段复杂度可控')]
         self.mapping()
         r=self.review_data({'S03':'FAIL','S08':'FAIL'},middle_derivable=False)
         for issue in r['issues']:
             issue.update(time_range=[0,16],problem='SIMULATED 提前开伞或末镜动作不符',fix='按脚本修正伞状态与末镜动作')
         result=self.finish(r)
-        self.assertEqual(self.partitions(result),[['S01','S02'],['S03','S04','S05','S06'],['S07','S08']])
-        self.assertEqual([g['reason'] for g in result['groups']],list(summaries.values()))
+        self.assertEqual(self.partitions(result),[['S01','S02'],['S03','S04','S05','S06','S07','S08']])
+        self.assertEqual([g['planned_duration'] for g in result['groups']],[5,12])
         verdicts={d['shot_id']:d['status'] for d in result['decisions']}
         self.assertEqual(verdicts['S03'],'mismatch')
         self.assertEqual(verdicts['S08'],'mismatch')
@@ -158,7 +174,10 @@ class EventGroupingTests(fixtures.Base):
             s['requirements']['inherits_from']=None
             self.p['shots'].append(s)
         self.p['groups'][0]['shot_ids']=[s['id'] for s in self.p['shots']]
+        self.events(['E01']*13)
+        for s in self.p['shots']: s['duration']=1
         result=self.run_plan()
         self.assertEqual(len(result['groups']),2)
         self.assertEqual([sid for g in result['groups'] for sid in g['shot_ids']],self.p['groups'][0]['shot_ids'])
-        self.assertTrue(all(len(g['shot_ids'])<=12 and '12镜' in g['reason'] for g in result['groups']))
+        self.assertEqual([len(g['shot_ids']) for g in result['groups']],[12,1])
+        self.assertIn('12镜',result['groups'][-1]['reason'])

@@ -1,11 +1,11 @@
 # 事实约束与相邻分组
 
-默认输入为视频、脚本和资产图：跳过初始试生成规划，登记视频来源组后直接进行匹配与审查，再运行 --post-review。已有视频不要求脚本时长；PROFILE.json 可写 {}，按连续事件聚合，不使用模型时长与成本限制。
+默认输入为视频、脚本和资产图：跳过初始试生成规划，登记视频来源组后直接进行匹配与审查，再运行 --post-review。已有视频可无脚本时长先抽帧审查；新版聚合前补齐计划时长和来源。PROFILE.json 可写 {}，按剧情聚合，固定每组 ≤15 秒、≤12 镜，不使用模型时长与成本限制。
 
 
 代理从资产和原脚本提取有来源的事实，工具只计算结构化约束。不把抽取判断包装成数学确定性。
 
-默认一次 LLM 调用处理完整脚本与资产观察，输出所有镜头的 facts、state_changes、requirements（含块级 provenance）及 event（id/summary/source），不分别为各镜或各字段发起调用。代理仅写 requirements.entry_state 的新增种子、inherits_from 和有脚本授权的 state_changes；requirements.py 统一计算完整 entry_state/exit_state。后续生成、匹配和审查复用结果，不再次提取同一脚本。校验失败只修正指出的冲突，来源不明仍保留 unknown/inference，不能为了减少往返升级成事实。
+默认一次 LLM 调用处理完整脚本与资产观察，输出所有镜头的 facts、state_changes、requirements（含块级 provenance）、event（初步自然段 id/summary/source）、duration/duration_source 及 narrative_plan（相邻承接与整段复杂度），不分别为各镜或各字段发起调用。代理仅写 requirements.entry_state 的新增种子、inherits_from 和有脚本授权的 state_changes；requirements.py 统一计算完整 entry_state/exit_state。后续生成、匹配和审查复用结果，不再次提取同一脚本。校验失败只修正指出的冲突，来源不明仍保留 unknown/inference，不能为了减少往返升级成事实。
 
 每镜 facts 示例：
 
@@ -27,7 +27,7 @@ intent 为 critical_result、narrative_turn、required_cut 三个布尔值。初
 python scripts/planner.py PROJECT.json PROFILE.json --post-review --output AGGREGATION.json
 ```
 
---post-review 不与 --apply 合用，不覆盖来源组、版本或时间映射。有 event 时仅枚举相邻、同事件及同 continuity_id 的区间，可以跨场景；无 event 的旧项目沿用同场景限制，保护首尾、关键状态和必要锚点。实际时间戳不参与聚合；求解器每区间最多 12 镜是计算上限。没有新增 LLM 判断或 API 调用。规则只优化保留图片数量等内部目标，不声称优化真实视觉质量。
+--post-review 不与 --apply 合用，不覆盖来源组、版本或时间映射。先自然初分、强制相邻合并、再复核小于 8 秒短段，event 不再是最终硬边界；只聚合相邻且 continuity_id 一致、来源边界通过的镜头，可以跨场景。整段复杂度不得由两两可合并无限外推。固定最终组后再优化保留图，保护首尾、关键状态和必要锚点。脚本计划时长十进制求和 ≤15 秒，每组 ≤12 镜；实际时间戳不参与求和。旧项目缺新字段先待规划；单镜超限明确提示，不截短或删镜。没有新增 LLM 判断或 API 调用，也不声称优化真实视觉质量。
 
 详细判定、每份视频的必要漏镜阈值及证据失效见 [实证聚合](planning.md)。最终仅两张表与小分镜图，内部规划数据不交付。
 

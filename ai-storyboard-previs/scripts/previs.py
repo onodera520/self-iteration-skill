@@ -128,6 +128,8 @@ def validate(p, project_path):
         require(number(c["budget_cny"]) and c["budget_cny"] >= 0, "invalid budget")
     from requirements import contexts
     contexts(p)
+    from grouping import validate_metadata
+    validate_metadata(p)
     if c.get("video_input_mode") == "assets":
         used = {aid for s in p["shots"] for aid in s["asset_ids"]}
         missing_assets = [a["id"] for a in p["assets"] if a["id"] in used and (not a.get("path") or not resolve(project_path, a["path"]).is_file())]
@@ -156,6 +158,8 @@ def group_fingerprint(p, project_path, g):
     binding = {"group": g, "shots": ss, "assets": asset_rows, "source": p["source_script"], "aspect_ratio": p.get("config", {}).get("aspect_ratio"), "video_input_mode": p.get("config", {}).get("video_input_mode", "anchors")}
     if "user_video_prompt" in p:
         binding["user_video_prompt"] = p["user_video_prompt"]
+    if "narrative_plan" in p:
+        binding["narrative_plan"] = p["narrative_plan"]
     return digest(binding)
 
 
@@ -262,6 +266,7 @@ def video_context(p, project_path, gid):
     rows = [{"shot_id": s["id"], "script": s["script"], "shot_size": s.get("shot_size"),
              "requirements": resolved.get(s["id"]), "selected_frame": current_frame(p, project_path, s["id"])} for s in shots(p, g)]
     for row, s in zip(rows, shots(p, g)):
+        row.update(planned_duration=s.get("duration"), duration_source=copy.deepcopy(s.get("duration_source")))
         if "event" in s:
             row.update(event=copy.deepcopy(s["event"]), scene_id=s["scene_id"], continuity_id=s["continuity_id"])
     used_assets = {aid for s in shots(p, g) for aid in s["asset_ids"]}
@@ -291,7 +296,15 @@ def video_context(p, project_path, gid):
               "duration": task.get("duration"), "assets": assets, "shots": rows, "mapping": mapping,
               "extraction": extraction, "boundaries": boundaries}
     if p.get("config", {}).get("video_source") == "imported":
-        result["review_schema"] = 2
+        result["review_schema"] = 3
+        result["reference_policy_version"] = 2  # Per-shot structural asset evidence gates.
+        for row, shot in zip(rows, shots(p, g)):
+            row["asset_ids"] = list(shot["asset_ids"])
+        result["narrative_plan"] = copy.deepcopy(p.get("narrative_plan"))
+        result["review_scope"] = {"dialogue_text": False, "dialogue_lip_sync": False,
+            "duration_accuracy": False, "visual_actions": True, "subtitles": True,
+            "group_duration_basis": "script_plan", "max_group_seconds": 15,
+            "max_group_shots": 12, "short_group_seconds": 8}
     result["context_fingerprint"] = digest(result)
     result["previous_review"] = next((copy.deepcopy(r) for r in reversed(p.get("reviews", [])) if r["group_id"] == gid), None)
     return result
@@ -311,6 +324,9 @@ def review_current(p, project_path, gid):
         version, fp = g["version"], group_fingerprint(p, project_path, g)
     for r in reversed(p.get("reviews", [])):
         if r["group_id"] == gid and r["version"] == version and r["video_sha256"] == sha(path) and r.get("fingerprint") == fp and not r.get("stale"):
+            if p.get("config", {}).get("video_source") == "imported" and (
+                    r.get("review_schema") != 3 or r.get("reference_policy_version") != 2 or not r.get("context_fingerprint")):
+                return None
             if r.get("context_fingerprint") and (gid == "__delivery__" or r["context_fingerprint"] != video_context(p, project_path, gid)["context_fingerprint"]):
                 return None
             return r
@@ -338,6 +354,8 @@ def delivery_current(p, project_path):
 def validate_imported_review(p, project_path, r, ctx):
     """Independent shot verdicts; absence uses a rescan, never a fabricated frame."""
     from storyboard import CHECKS, current_frame
+    if ctx.get("narrative_plan"):
+        require(r.get("grouping_checked") is True, "batch review must check narrative grouping and whole-interval complexity")
     ids = [s["shot_id"] for s in ctx["shots"]]
     rows = r.get("shot_reviews", [])
     require([v.get("shot_id") for v in rows] == ids, "shot_reviews must cover group in order")
@@ -374,6 +392,10 @@ def validate_imported_review(p, project_path, r, ctx):
             else:
                 require("FAIL" in checks.values() and issues and "FAIL" in r["checks"].values(), "shot FAIL needs checks and a located issue")
         else:
+            checks = v.get("checks", {})
+            require(set(checks) == CHECKS and all(x in ("PASS", "FAIL", "uncertain") for x in checks.values()), "all per-shot checks required")
+            require("uncertain" in checks.values() and "FAIL" not in checks.values() and v.get("followup"),
+                    "uncertain shot needs uncertain checks and concrete followup; confirmed FAIL must remain FAIL")
             require(not all(x == "PASS" for x in r["checks"].values()), "uncertain shot cannot pass group")
         require(mapping["status"] != "absent" or verdict == "absent", "confirmed absence must stay absent")
     for a in r["reference_assessments"]:
@@ -401,6 +423,11 @@ def validate_imported_review(p, project_path, r, ctx):
             require(a["decision"] == "ai_fill", "derivable absence needs explicit basis")
         elif v["verdict"] == "absent":
             require(a["decision"] == "pending", "non-derivable or undecided absence cannot be a reviewed anchor")
+        if v["verdict"] == "PASS":
+            expected = "ai_fill" if derivable is True else "anchor"
+            require(a["decision"] == expected, "passed shot decision must follow derivable: true needs ai_fill basis; false/null retains anchor")
+    from asset_review import validate_asset_evidence
+    validate_asset_evidence(p, project_path, r, ctx)
 
 
 def record_review(p, project_path, r):
@@ -462,6 +489,10 @@ def record_review(p, project_path, r):
                 require(times and all(any(e["shot_id"] == a["shot_id"] and e["time"] == t for e in evidence) for t in times), "reference assessment needs same-shot evidence")
         if imported:
             validate_imported_review(p, project_path, r, ctx)
+            require(r.get("review_schema", 3) == 3 and r.get("reference_policy_version", 2) == 2,
+                    "old review version cannot be upgraded without new evidence")
+            r = copy.deepcopy(r)
+            r.update(review_schema=3, reference_policy_version=2)
         boundary_checks = r.get("boundary_checks", [])
         require([b.get("shot_id") for b in boundary_checks] == [b["shot_id"] for b in ctx["boundaries"]], "all adjacent boundary checks required")
         for b, source in zip(boundary_checks, ctx["boundaries"]):

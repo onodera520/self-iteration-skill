@@ -159,12 +159,19 @@ def input_fingerprint(p, project_path, profile):
         r = s["reference"]
         s["reference"] = {k: r.get(k) for k in ("path", "role", "locked")}
         s["reference"]["exists"] = bool(r.get("path") and resolve(project_path, r["path"]).is_file())
-    return digest({"source": p["source_script"], "assets": p["assets"], "shots": ss, "aspect_ratio": p.get("config", {}).get("aspect_ratio"), "video_input_mode": p.get("config", {}).get("video_input_mode", "anchors"), "profile": profile})
+    binding = {"source": p["source_script"], "assets": p["assets"], "shots": ss, "aspect_ratio": p.get("config", {}).get("aspect_ratio"), "video_input_mode": p.get("config", {}).get("video_input_mode", "anchors"), "profile": profile}
+    if "narrative_plan" in p:
+        binding["narrative_plan"] = p["narrative_plan"]
+    return digest(binding)
 
 
 def options(p, project_path, profile, analysis, start, end):
     ss = p["shots"][start:end]
-    length = Decimal(0) if p.get("_content_review") else sum(Decimal(str(s["duration"])) for s in ss)
+    length = (sum(Decimal(str(s["duration"])) for s in ss) if not p.get("_content_review") or p.get("_narrative_ready") else Decimal(0))
+    if "_narrative_ranges" in p and (start, end) not in p["_narrative_ranges"]:
+        return []
+    if p.get("_narrative_ready") and length > Decimal(15):
+        return []
     if len(ss) > profile["max_shots_per_group"] or (len(ss) > 1 and not profile["allow_multi_shot"]):
         return []
     if not p.get("_content_review") and (length < Decimal(str(profile["min_duration"])) or length > Decimal(str(profile["max_duration"]))):
@@ -173,7 +180,7 @@ def options(p, project_path, profile, analysis, start, end):
         return []
     event_mode = p.get("_content_review") and "event" in ss[0]
     boundary_key = (lambda s: s["event"]["id"]) if event_mode else (lambda s: s["scene_id"])
-    if any(boundary_key(s) != boundary_key(ss[0]) or s["continuity_id"] != ss[0]["continuity_id"] for s in ss):
+    if "_narrative_ranges" not in p and any(boundary_key(s) != boundary_key(ss[0]) or s["continuity_id"] != ss[0]["continuity_id"] for s in ss):
         return []
     if p.get("_content_review") and any(start < boundary < end for boundary in p.get("_blocked_group_starts", [])):
         return []
@@ -270,7 +277,11 @@ def aggregation_fingerprint(p, project_path, profile):
         rows.append([g["id"], group_fingerprint(p, project_path, g),
                      ctx["context_fingerprint"] if ctx else None, r,
                      [current_frame(p, project_path, sid) for sid in g["shot_ids"]]])
-    return digest([input_fingerprint(p, project_path, profile), rows, p.get("config", {}).get("missing_policy", {})])
+    binding = [input_fingerprint(p, project_path, profile), rows, p.get("config", {}).get("missing_policy", {})]
+    if p.get("config", {}).get("video_source") == "imported":
+        from grouping import POLICY_VERSION
+        binding.append(POLICY_VERSION)
+    return digest(binding)
 
 
 def current_aggregation(p, project_path):
@@ -294,11 +305,12 @@ def missing_summary(groups, decisions, config):
 
 def imported_post_review_plan(p, project_path, profile):
     from storyboard import current_frame, mapping_row
+    from grouping import partition
     validate(p, project_path)
-    # Content grouping has no downstream model, price, aspect or duration gate.
-    effective = dict(id="content-review", source={"kind": "inference", "ref": "按连续事件分组；旧项目按同场景连续性；每组至多12镜为当前求解器上限"},
+    # Narrative partitioning precedes anchor optimization; no paid model profile.
+    effective = dict(id="content-review", source={"kind": "inference", "ref": "剧情初分、相邻合并、短段复核；15秒与12镜上限"},
                      max_images=12, max_shots_per_group=12, max_fill_per_group=10, allow_multi_shot=True,
-                     min_duration=1, max_duration=1, video_cost_cny=0, missing_anchor_cost_cny=0,
+                     min_duration=.001, max_duration=15, video_cost_cny=0, missing_anchor_cost_cny=0,
                      aspect_ratios=[p["config"].get("aspect_ratio")])
     working, states, reviews = copy.deepcopy(p), {}, {}
     working.update(_post_review=True, _content_review=True)
@@ -333,25 +345,22 @@ def imported_post_review_plan(p, project_path, profile):
             s["reference"]["locked"] = True
         s["omission_assessment"] = dict(allowed=state["eligible"], risk="low" if state["eligible"] else "unknown",
             rationale=state["reason"], source={"kind": "inference", "ref": "逐镜审查与原视频补查：" + state["source_group_id"]})
+    narrative = partition(p, working["_blocked_group_starts"])
+    working["_narrative_ready"] = narrative["feasible"]
+    # Pending input stays visible without inventing timing or a compliant group.
+    working["_narrative_ranges"] = narrative["ranges"] if narrative["feasible"] else [(i, i+1) for i in range(len(p["shots"]))]
     result = plan(working, project_path, effective)
-    # Event IDs describe narrative units, not state inheritance or visual approval.
-    # Count contiguous runs: repeated IDs separated by other events never merge.
-    event_runs = {}
-    for _, run in itertools.groupby(p["shots"], key=lambda s: (s.get("event", {}).get("id"), s["continuity_id"])):
-        run = list(run)
-        for s in run:
-            event_runs[s["id"]] = len(run)
+    required = {r['shot_id'] for r in result['analysis']
+                if set(r['mandatory_rules']) - {'SEMANTIC_UNAPPROVED'}}
     original_shots = {s["id"]: s for s in p["shots"]}
     for n, g in enumerate(result["groups"], 1):
         old_id = g["id"]
-        first = original_shots[g["shot_ids"][0]]
-        reason = "旧项目按同场景及连续性分组；画面问题见逐镜表。"
-        if "event" in first:
-            reason = first["event"]["summary"]
-            if event_runs[first["id"]] > effective["max_shots_per_group"]:
-                reason += "；事件超过12镜，按求解器上限在事件内拆分。"
-        g.update(id=f"A{n:02d}", reason=reason)
-        g.pop("planned_duration", None)
+        reason = narrative["reasons"][n-1] if narrative["feasible"] else '待分组：' + '；'.join(narrative["limitations"])
+        g.update(id=f"A{n:02d}" if narrative["feasible"] else f"P{n:02d}", reason=reason,
+                 planning_status="ready" if narrative["feasible"] else "pending",
+                 duration_has_suggestion=any(original_shots[sid].get("duration_source", {}).get("kind") == "inference" for sid in g["shot_ids"]))
+        if not narrative["feasible"]:
+            g["planned_duration"] = None
         g["source_group_ids"] = list(dict.fromkeys(states[sid]["source_group_id"] for sid in g["shot_ids"]))
         for d in result["decisions"]:
             if d["group_id"] != old_id:
@@ -369,7 +378,8 @@ def imported_post_review_plan(p, project_path, profile):
                          reason=state["reason"] + ("；保留组首尾或关键状态作为参考。" if a.get("decision") == "ai_fill" else ""))
             else:
                 status = "mismatch" if verdict == "FAIL" else "pending"
-                if verdict == "absent" and a.get("derivable") is not None:
+                if verdict == "absent" and (a.get("derivable") is False or
+                        (a.get("derivable") is True and (narrative["feasible"] or d['shot_id'] in required))):
                     status = "missing_required"
                 note = ""
                 if status == "missing_required":
@@ -379,10 +389,11 @@ def imported_post_review_plan(p, project_path, profile):
     for d in result["decisions"]:
         if d["mode"] == "ai_fill":
             require(all(by_id[b]["status"] == "anchor_reviewed" for b in d["bracket"].values()), "inference basis is not a retained passed anchor")
-    result.update(stage="post_review", feasible=True, profile=copy.deepcopy(profile),
+    result.update(stage="post_review", feasible=narrative["feasible"], profile=copy.deepcopy(profile),
+                  grouping_trace=narrative["trace"],
                   evidence_fingerprint=aggregation_fingerprint(p, project_path, profile),
                   missing_summary=missing_summary(p["groups"], result["decisions"], p["config"]),
-                  limitations=["省图是推导建议，未经生成验证；视频漏镜仍保留漏镜结论。"],
+                  limitations=narrative["limitations"] + ["省图是推导建议，未经生成验证；视频漏镜仍保留漏镜结论。"],
                   objective={"anchor_count": sum(d["mode"] == "anchor" for d in result["decisions"]),
                              "fill_count": sum(d["mode"] == "ai_fill" for d in result["decisions"]),
                              "pending_count": sum(d["mode"] == "pending" for d in result["decisions"]),

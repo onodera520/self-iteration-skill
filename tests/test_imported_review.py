@@ -15,7 +15,7 @@ class ImportedReviewTests(fixtures.Base):
     select_mapping = video_fixtures.VideoEvidenceTests.select_mapping
 
     def setUp(self):
-        super().setUp()
+        fixtures.Base.setUp(self)
         self.p['config'].update(workflow='video_evidence', video_source='imported', video_input_mode='assets')
         self.p['shots'] = self.p['shots'][:3]
         self.p['groups'] = self.p['groups'][:1]
@@ -26,7 +26,11 @@ class ImportedReviewTests(fixtures.Base):
         s['requirements']['provenance'][0]['source'] = 'S02 同场景观察，无持物变化'
         self.p['source_script'] = ' '.join(s['id'] + ' ' + s['script'] for s in self.p['shots'])
         for s in self.p['shots']:
-            s.pop('duration')
+            s.update(duration=2, duration_source=dict(kind='script',ref='SIMULATED 2 seconds'),
+                     event=dict(id='E01',summary='持钥匙、观察并交接',source=dict(kind='inference',ref='SIMULATED whole story')))
+        self.p['narrative_plan']=dict(source=dict(kind='inference',ref='SIMULATED whole story'),
+            boundaries=[dict(before_shot_id=s['id'],merge_allowed=True,strength=2,reason='连续行动') for s in self.p['shots'][1:]],
+            safe_spans=[dict(shot_ids=[s['id'] for s in self.p['shots']],reason='同场两人一把钥匙，一次交接')])
         for i, a in enumerate(self.p['assets']):
             a['path'] = str(self.png(a['id'], (i*50, 60, 90)))
 
@@ -56,21 +60,37 @@ class ImportedReviewTests(fixtures.Base):
 
     def review_data(self, verdicts=None, middle_derivable=True, gid='G01'):
         ctx = core.video_context(self.p, self.path, gid)
-        r = dict(group_id=gid, version=ctx['version'], video_sha256=ctx['video_sha256'], context_fingerprint=ctx['context_fingerprint'],
+        r = dict(grouping_checked=True, group_id=gid, version=ctx['version'], video_sha256=ctx['video_sha256'], context_fingerprint=ctx['context_fingerprint'],
             checks={c:'PASS' for c in ('shot','continuity','story','subtitles')},
             coverage=dict(shot_ids=core.group(self.p,gid)['shot_ids'], mapping_verified=True, limitations=[]),
-            evidence=[], shot_reviews=[], reference_assessments=[], issues=[], uncertainties=[],
+            evidence=[], shot_reviews=[], reference_assessments=[], issues=[], uncertainties=[], asset_comparisons=[],
             boundary_checks=[dict(shot_id=b['shot_id'],verdict='PASS',observation='SIMULATED boundary inspected') for b in ctx['boundaries']])
         for row, frame in zip(ctx['mapping']['shots'],ctx['extraction']['frames']):
             sid = row['shot_id']
             verdict = (verdicts or {}).get(sid, 'PASS' if row['status']=='matched' else row['status'])
             times = [frame['time']] if verdict in ('PASS','FAIL') else []
             if times:
-                r['evidence'].append(dict(frame, shot_id=sid, observation='SIMULATED frame content and continuous neighborhood'))
+                r['evidence'].append(dict(frame, shot_id=sid, observation='SIMULATED frame content and continuous neighborhood',
+                    visible_facts=['SIMULATED lapel, crew neck and face structure visible'], interpretation='SIMULATED structure matches'))
             checks = {c:'PASS' for c in boards.CHECKS}
             if verdict == 'FAIL':
                 checks['props'] = 'FAIL'
             r['shot_reviews'].append(dict(shot_id=sid,verdict=verdict,checks=checks,evidence_times=times,reason='SIMULATED '+verdict))
+            scope = []
+            if verdict != 'absent':
+                aids = next(s['asset_ids'] for s in self.p['shots'] if s['id']==sid)
+                for asset in ctx['assets']:
+                    if asset['id'] not in aids or asset['kind'] != 'character':
+                        continue
+                    for aspect in ('wardrobe','appearance'):
+                        scope.append(dict(asset_id=asset['id'],aspect=aspect,required=True,reason='SIMULATED relevant structure'))
+                        r['asset_comparisons'].append(dict(id=sid+'-'+asset['id']+'-'+aspect,shot_id=sid,asset_id=asset['id'],
+                            asset_sha256=asset['sha256'],aspect=aspect,evidence_refs=[copy.deepcopy(frame)] if times else [],
+                            condition_factors=['SIMULATED rain'],stable_matches=['SIMULATED stable structure'] if times else [],
+                            stable_conflicts=[],decision='PASS' if times else 'uncertain',
+                            unobservable_features=[] if times else ['SIMULATED necessary structure invisible'],
+                            followup='' if times else 'Inspect a clear same-shot frame',basis_shot_ids=[]))
+                r['shot_reviews'][-1]['identity_scope']=scope
             derivable = middle_derivable if sid=='S02' and verdict in ('PASS','absent') else (None if verdict=='uncertain' else False)
             decision = 'ai_fill' if derivable is True else ('anchor' if verdict=='PASS' else 'pending')
             r['reference_assessments'].append(dict(shot_id=sid,decision=decision,derivable=derivable,
@@ -79,10 +99,13 @@ class ImportedReviewTests(fixtures.Base):
             if verdict in ('FAIL','absent'):
                 r['checks']['story'] = 'FAIL'
                 r['issues'].append(dict(id='issue-'+sid,shot_ids=[sid],time_range=[0,6],severity='medium',
-                    problem='必要画面未出现' if verdict=='absent' else '画面钥匙颜色与资产轻微不符', expected='脚本及资产要求',
+                    asset_ids=[],asset_comparison_ids=[],
+                    problem='必要画面未出现' if verdict=='absent' else '画面钥匙颜色与脚本轻微不符', expected='脚本要求',
                     actual='SIMULATED discrepancy',evidence=['SIMULATED full rescan' if verdict=='absent' else frame['path']],
                     repair_target='video_shot',fix='先评估推导，必要时补生成' if verdict=='absent' else '重新生成该镜，修正钥匙颜色'))
             if verdict=='uncertain':
+                checks['identity']='uncertain'
+                r['shot_reviews'][-1]['followup']='Inspect more same-shot continuous frames'
                 r['checks']['shot']='uncertain'
                 r['uncertainties'].append(sid+' 需要更多连续帧')
         return r
@@ -93,19 +116,20 @@ class ImportedReviewTests(fixtures.Base):
         planner.store_aggregation(self.p,self.path,result)
         return result
 
-    def test_three_shots_without_duration_two_tables_and_local_thumbnails(self):
+    def test_three_shots_planned_duration_two_tables_and_local_thumbnails(self):
         core.validate(self.p,self.path)
         self.mapping()
         before = copy.deepcopy(self.p)
         result = self.finish()
         self.assertEqual([d['mode'] for d in result['decisions']],['anchor','ai_fill','anchor'])
-        self.assertNotIn('planned_duration',result['groups'][0])
+        self.assertEqual(result['groups'][0]['planned_duration'],6)
         for field in ('groups','tasks','shots','board_mappings'):
             self.assertEqual(self.p[field],before[field])
         out = self.path.parent/'delivery'
         text = Path(boards.render(self.p,self.path,out)).read_text(encoding='utf8')
         self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),2)
-        self.assertNotIn('时长',text)
+        self.assertIn('| 总时长 |',text)
+        self.assertIn('| 镜头时长 |',text)
         self.assertNotIn('视频结论',text)
         self.assertIn('| 检验通过 | 可推导省图 | S01 + S03 |',text)
         self.assertEqual(len(list(out.rglob('*.png'))),5)
@@ -195,6 +219,55 @@ class ImportedReviewTests(fixtures.Base):
         self.assertEqual(result['decisions'][1]['status'],'missing_required')
         self.assertEqual(result['missing_summary'][0]['bad_num'],1)
 
+    def test_pass_decision_table_rejects_hidden_or_inconsistent_inference(self):
+        self.mapping()
+        for derivable, decision in ((True, 'anchor'), (None, 'pending'), (False, 'pending')):
+            with self.subTest(derivable=derivable, decision=decision):
+                r=self.review_data(middle_derivable=derivable)
+                r['reference_assessments'][1].update(decision=decision,basis_shot_ids=[])
+                with self.assertRaisesRegex(ValueError,'passed shot decision'):
+                    core.record_review(self.p,self.path,r)
+        for derivable in (False, None):
+            result=self.finish(self.review_data(middle_derivable=derivable))
+            self.assertEqual(result['decisions'][1]['status'],'anchor_reviewed')
+
+    def test_new_group_endpoint_overrides_fill_candidate_without_changing_verdict(self):
+        for status in ('matched', 'absent'):
+            with self.subTest(status=status):
+                for s, duration in zip(self.p['shots'], (8,6,8)):
+                    s['duration']=duration
+                self.mapping({'S02':status},revision=2 if status=='absent' else 1)
+                result=self.finish()
+                self.assertEqual(len(result['groups']),2)
+                self.assertEqual(result['decisions'][1]['status'],
+                                 'anchor_reviewed' if status=='matched' else 'missing_required')
+                self.assertEqual(result['missing_summary'][0]['bad_num'],0 if status=='matched' else 1)
+                review=core.review_current(self.p,self.path,'G01')
+                self.assertEqual(review['reference_assessments'][1]['decision'],'ai_fill')
+                self.assertEqual(review['shot_reviews'][1]['verdict'],'PASS' if status=='matched' else 'absent')
+
+    def test_unchanged_state_does_not_allow_omitting_narrative_turn(self):
+        s=self.p['shots'][1]
+        s['state_changes']=[]
+        s['intent']['narrative_turn']=True
+        self.mapping()
+        result=self.finish()
+        self.assertEqual(result['decisions'][1]['status'],'anchor_reviewed')
+        self.assertIn('CRITICAL_RESULT',result['analysis'][1]['mandatory_rules'])
+
+    def test_previous_reference_policy_cannot_reuse_review_or_aggregation(self):
+        self.mapping();self.finish()
+        old_ctx=core.video_context(self.p,self.path,'G01')
+        old_ctx.pop('reference_policy_version')
+        old_ctx.pop('previous_review');old_ctx.pop('context_fingerprint')
+        old_review=copy.deepcopy(self.p['reviews'][-1])
+        old_review['context_fingerprint']=core.digest(old_ctx)
+        self.p['reviews'][-1]=old_review
+        self.assertIsNone(core.review_current(self.p,self.path,'G01'))
+        self.assertIsNone(planner.current_aggregation(self.p,self.path))
+        with self.assertRaisesRegex(ValueError,'context changed'):
+            core.record_review(self.p,self.path,old_review)
+
     def test_rescan_replaces_wrong_selection_and_requires_fresh_group_review(self):
         self.mapping({'S02':'uncertain'})
         self.finish()
@@ -223,7 +296,10 @@ class ImportedReviewTests(fixtures.Base):
         self.select_mapping('G01')
         self.assertIsNone(core.review_current(self.p,self.path,'G01'))
         r=self.review_data()
-        r['evidence'][1]=dict(f,shot_id='S02',observation='SIMULATED corrected frame and neighbors inspected')
+        r['evidence'][1]=dict(f,shot_id='S02',observation='SIMULATED corrected frame and neighbors inspected',
+            visible_facts=['SIMULATED corrected visible structure'],interpretation='SIMULATED structure matches')
+        for c in r['asset_comparisons']:
+            if c['shot_id']=='S02': c['evidence_refs']=[copy.deepcopy(f)]
         r['shot_reviews'][1]['evidence_times']=[2.75]
         r['reference_assessments'][1]['evidence_times']=[2.75]
         result=self.finish(r)
