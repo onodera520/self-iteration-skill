@@ -88,11 +88,25 @@ def validate(p, project_path):
         require(len(ids) == len(set(ids)), "duplicate " + kind + " ID")
     require(p["shots"] and p["groups"], "shots and groups required")
     assets = {a["id"] for a in p["assets"]}
+    event_shots = [s for s in p["shots"] if "event" in s]
+    require(not event_shots or len(event_shots) == len(p["shots"]), "event blocks must cover every shot or be absent for legacy projects")
+    event_summaries = {}
+    for s in event_shots:
+        event = s["event"]
+        require(isinstance(event, dict), "event must be an object")
+        require(isinstance(event.get("id"), str) and re.fullmatch(r"[\w-]+", event["id"]), "invalid event ID")
+        require(isinstance(event.get("summary"), str) and event["summary"].strip(), "event summary required")
+        source = event.get("source", {})
+        require(isinstance(source, dict) and source.get("kind") in ("script", "asset", "inference")
+                and isinstance(source.get("ref"), str) and source["ref"].strip(), "event source required")
+        require(event["id"] not in event_summaries or event_summaries[event["id"]] == event["summary"], "same event ID needs the same summary")
+        event_summaries[event["id"]] = event["summary"]
     missing = []
     for a in p["assets"]:
         require(a.get("kind") in ("character", "scene", "prop"), "invalid asset kind")
     for s in p["shots"]:
-        require(number(s.get("duration")) and s["duration"] > 0, "positive shot duration required")
+        if p.get("config", {}).get("video_source") != "imported" or s.get("duration") is not None:
+            require(number(s.get("duration")) and s["duration"] > 0, "positive shot duration required")
         require(all(isinstance(s.get(k), str) and s[k].strip() for k in ("script", "scene_id", "continuity_id", "required_result")), "shot narrative fields required")
         require(set(s.get("asset_ids", [])) <= assets, "unknown asset")
         r = s.get("reference", {})
@@ -247,6 +261,9 @@ def video_context(p, project_path, gid):
     extraction = read(resolve(project_path, mapping["evidence_file"])) if mapping else None
     rows = [{"shot_id": s["id"], "script": s["script"], "shot_size": s.get("shot_size"),
              "requirements": resolved.get(s["id"]), "selected_frame": current_frame(p, project_path, s["id"])} for s in shots(p, g)]
+    for row, s in zip(rows, shots(p, g)):
+        if "event" in s:
+            row.update(event=copy.deepcopy(s["event"]), scene_id=s["scene_id"], continuity_id=s["continuity_id"])
     used_assets = {aid for s in shots(p, g) for aid in s["asset_ids"]}
     assets = [dict(a, sha256=sha(resolve(project_path, a["path"])) if a.get("path") and resolve(project_path, a["path"]).is_file() else "MISSING")
               for a in p["assets"] if a["id"] in used_assets]
@@ -257,6 +274,7 @@ def video_context(p, project_path, gid):
             continue
         other = p["groups"][n]
         sid = other["shot_ids"][edge]
+        neighbor = next(s for s in p["shots"] if s["id"] == sid)
         ot, op = current_video(p, project_path, other)
         om = current_mapping(p, project_path, other["id"])
         boundaries.append({"group_id": other["id"], "shot_id": sid,
@@ -264,10 +282,16 @@ def video_context(p, project_path, gid):
             "video_sha256": sha(op) if ot else None,
             "requirements": resolved.get(sid),
             "mapping": next(r for r in om["shots"] if r["shot_id"] == sid) if om else None})
+        if p.get("config", {}).get("video_source") == "imported":
+            boundaries[-1]["selected_frame"] = current_frame(p, project_path, sid)
+            if "event" in neighbor:
+                boundaries[-1].update(event=copy.deepcopy(neighbor["event"]), scene_id=neighbor["scene_id"], continuity_id=neighbor["continuity_id"])
     result = {"group_id": gid, "version": g["version"], "video_sha256": sha(path),
               "group_fingerprint": group_fingerprint(p, project_path, g), "video": str(path),
               "duration": task.get("duration"), "assets": assets, "shots": rows, "mapping": mapping,
               "extraction": extraction, "boundaries": boundaries}
+    if p.get("config", {}).get("video_source") == "imported":
+        result["review_schema"] = 2
     result["context_fingerprint"] = digest(result)
     result["previous_review"] = next((copy.deepcopy(r) for r in reversed(p.get("reviews", [])) if r["group_id"] == gid), None)
     return result
@@ -311,7 +335,76 @@ def delivery_current(p, project_path):
     return path.is_file() and sha(path) == d.get("sha256") and d.get("fingerprint") == delivery_fingerprint(p, project_path)
 
 
+def validate_imported_review(p, project_path, r, ctx):
+    """Independent shot verdicts; absence uses a rescan, never a fabricated frame."""
+    from storyboard import CHECKS, current_frame
+    ids = [s["shot_id"] for s in ctx["shots"]]
+    rows = r.get("shot_reviews", [])
+    require([v.get("shot_id") for v in rows] == ids, "shot_reviews must cover group in order")
+    by_id = {v["shot_id"]: v for v in rows}
+    mappings = {v["shot_id"]: v for v in ctx["mapping"]["shots"]}
+    requirements = {v["shot_id"]: v["requirements"] for v in ctx["shots"]}
+    evidence = r.get("evidence", [])
+    for v in rows:
+        sid, verdict = v["shot_id"], v.get("verdict")
+        require(verdict in ("PASS", "FAIL", "uncertain", "absent") and v.get("reason"), "shot verdict and reason required")
+        mapping = mappings[sid]
+        issues = [i for i in r.get("issues", []) if sid in i["shot_ids"]]
+        times = v.get("evidence_times", [])
+        require(all(any(e["shot_id"] == sid and e["time"] == t for e in evidence) for t in times), "shot evidence must refer to observed frames")
+        if verdict == "absent":
+            require(mapping["status"] == "absent" and mapping.get("full_rescan") and mapping.get("rescan"), "absent verdict requires complete rescan")
+            require(not times and not any(e["shot_id"] == sid for e in evidence), "absent shot cannot claim a matching frame")
+            require(issues and r["checks"]["story"] == "FAIL", "confirmed absence needs a located issue and story FAIL")
+        elif verdict in ("PASS", "FAIL"):
+            require(mapping["status"] == "matched" and times and current_frame(p, project_path, sid), "shot verdict requires matched selected evidence")
+            selected = current_frame(p, project_path, sid)
+            require(any(e["shot_id"] == sid and resolve(project_path, e["path"]) == resolve(project_path, selected["path"])
+                        and e["time"] in times for e in evidence), "shot review must include its selected frame")
+            checks = v.get("checks", {})
+            require(set(checks) == CHECKS and all(x in ("PASS", "FAIL", "uncertain") for x in checks.values()), "all per-shot checks required")
+            if verdict == "PASS":
+                require(all(x == "PASS" for x in checks.values()) and not issues, "shot PASS cannot hide a localized issue")
+                require(requirements[sid] and requirements[sid]["ready"], "shot PASS requires ready requirements")
+                for boundary in r.get("boundary_checks", []):
+                    gi = p["groups"].index(group(p, ctx["group_id"]))
+                    previous = p["groups"][gi-1]["shot_ids"] if gi else []
+                    edge = ids[0] if boundary["shot_id"] in previous else ids[-1]
+                    require(sid != edge or boundary["verdict"] == "PASS", "boundary uncertainty/failure prevents adjacent shot PASS")
+            else:
+                require("FAIL" in checks.values() and issues and "FAIL" in r["checks"].values(), "shot FAIL needs checks and a located issue")
+        else:
+            require(not all(x == "PASS" for x in r["checks"].values()), "uncertain shot cannot pass group")
+        require(mapping["status"] != "absent" or verdict == "absent", "confirmed absence must stay absent")
+    for a in r["reference_assessments"]:
+        sid = a["shot_id"]
+        v = by_id[sid]
+        derivable = a.get("derivable")
+        require(derivable is None or type(derivable) is bool, "derivable must be boolean or null")
+        if v["verdict"] == "absent":
+            require(not a.get("evidence_times"), "absence assessment uses basis shots and rescan, not same-shot evidence")
+        else:
+            require(a.get("evidence_times", []) == v.get("evidence_times", []), "assessment must reuse shot evidence times")
+        if a["decision"] == "ai_fill":
+            basis = a.get("basis_shot_ids", [])
+            require(v["verdict"] in ("PASS", "absent") and derivable is True, "only passed or confirmed absent shots can be derivable")
+            require(requirements[sid] and requirements[sid]["ready"], "inference requires ready script requirements")
+            used_assets = next(s["asset_ids"] for s in p["shots"] if s["id"] == sid)
+            require(used_assets and all(any(asset["id"] == aid and asset["sha256"] != "MISSING" for asset in ctx["assets"]) for aid in used_assets),
+                    "inference requires current supporting asset images")
+            require(len(basis) == 2 and all(b in by_id for b in basis) and ids.index(basis[0]) < ids.index(sid) < ids.index(basis[1]), "fill needs ordered before/after basis shots")
+            require(all(by_id[b]["verdict"] == "PASS" and current_frame(p, project_path, b) for b in basis), "fill basis must be existing passed frames")
+            require(all(next(x for x in r["reference_assessments"] if x["shot_id"] == b)["decision"] == "anchor" for b in basis), "fill basis must be retained anchors; no circular inference")
+        elif v["verdict"] in ("FAIL", "uncertain"):
+            require(a["decision"] == "pending", "failed/uncertain picture cannot be an approved anchor")
+        if v["verdict"] == "absent" and derivable is True:
+            require(a["decision"] == "ai_fill", "derivable absence needs explicit basis")
+        elif v["verdict"] == "absent":
+            require(a["decision"] == "pending", "non-derivable or undecided absence cannot be a reviewed anchor")
+
+
 def record_review(p, project_path, r):
+    imported = p.get("config", {}).get("video_source") == "imported"
     gid = r["group_id"]
     if gid == "__delivery__":
         require(delivery_current(p, project_path), "delivery missing or stale")
@@ -340,7 +433,7 @@ def record_review(p, project_path, r):
     require(coverage.get("shot_ids") == ids, "review must account for every shot in order")
     require(isinstance(coverage.get("limitations"), list), "coverage limitations required")
     evidence = r.get("evidence", [])
-    require(evidence and all(e.get("shot_id") in ids and number(e.get("time")) and e["time"] >= 0 and e.get("observation") for e in evidence), "visible timed evidence required")
+    require((evidence or imported) and all(e.get("shot_id") in ids and number(e.get("time")) and e["time"] >= 0 and e.get("observation") for e in evidence), "visible timed evidence required")
     if duration:
         require(all(e["time"] <= duration for e in evidence), "evidence beyond video duration")
     issues = r.get("issues", [])
@@ -365,7 +458,10 @@ def record_review(p, project_path, r):
         for a in assessments:
             require(a.get("decision") in ("anchor", "ai_fill", "pending") and a.get("reason"), "reference decision and reason required")
             times = a.get("evidence_times", [])
-            require(times and all(any(e["shot_id"] == a["shot_id"] and e["time"] == t for e in evidence) for t in times), "reference assessment needs same-shot evidence")
+            if not imported:
+                require(times and all(any(e["shot_id"] == a["shot_id"] and e["time"] == t for e in evidence) for t in times), "reference assessment needs same-shot evidence")
+        if imported:
+            validate_imported_review(p, project_path, r, ctx)
         boundary_checks = r.get("boundary_checks", [])
         require([b.get("shot_id") for b in boundary_checks] == [b["shot_id"] for b in ctx["boundaries"]], "all adjacent boundary checks required")
         for b, source in zip(boundary_checks, ctx["boundaries"]):
@@ -382,7 +478,13 @@ def record_review(p, project_path, r):
         require(not r.get("uncertainties") and not coverage["limitations"], "uncertain evidence cannot PASS")
         require(not any(i["severity"] != "low" for i in issues), "unresolved substantial issue cannot PASS")
         require(coverage.get("mapping_verified") is True and {e["shot_id"] for e in evidence} == set(ids), "PASS needs verified mapping and every-shot evidence")
-        spans = coverage.get("actual_shots", [])
+        spans = coverage.get("actual_shots", []) if not imported else []
+        if imported:
+            # PTS are evidence locations, not a shot-duration acceptance target.
+            r = copy.deepcopy(r)
+            r.update(fingerprint=fp, verdict="PASS", id=uuid.uuid4().hex)
+            p.setdefault("reviews", []).append(r)
+            return r["verdict"]
         require([s.get("shot_id") for s in spans] == ids, "PASS needs actual ordered shot spans")
         last = 0.0
         for s in spans:

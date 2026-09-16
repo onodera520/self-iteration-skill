@@ -164,14 +164,18 @@ def input_fingerprint(p, project_path, profile):
 
 def options(p, project_path, profile, analysis, start, end):
     ss = p["shots"][start:end]
-    length = sum(Decimal(str(s["duration"])) for s in ss)
+    length = Decimal(0) if p.get("_content_review") else sum(Decimal(str(s["duration"])) for s in ss)
     if len(ss) > profile["max_shots_per_group"] or (len(ss) > 1 and not profile["allow_multi_shot"]):
         return []
-    if length < Decimal(str(profile["min_duration"])) or length > Decimal(str(profile["max_duration"])):
+    if not p.get("_content_review") and (length < Decimal(str(profile["min_duration"])) or length > Decimal(str(profile["max_duration"]))):
         return []
-    if profile.get("allowed_durations") and length not in [Decimal(str(x)) for x in profile["allowed_durations"]]:
+    if not p.get("_content_review") and profile.get("allowed_durations") and length not in [Decimal(str(x)) for x in profile["allowed_durations"]]:
         return []
-    if any(s["scene_id"] != ss[0]["scene_id"] or s["continuity_id"] != ss[0]["continuity_id"] for s in ss):
+    event_mode = p.get("_content_review") and "event" in ss[0]
+    boundary_key = (lambda s: s["event"]["id"]) if event_mode else (lambda s: s["scene_id"])
+    if any(boundary_key(s) != boundary_key(ss[0]) or s["continuity_id"] != ss[0]["continuity_id"] for s in ss):
+        return []
+    if p.get("_content_review") and any(start < boundary < end for boundary in p.get("_blocked_group_starts", [])):
         return []
     if p.get("config", {}).get("video_input_mode") == "assets":
         used = {aid for s in ss for aid in s["asset_ids"]}
@@ -266,7 +270,7 @@ def aggregation_fingerprint(p, project_path, profile):
         rows.append([g["id"], group_fingerprint(p, project_path, g),
                      ctx["context_fingerprint"] if ctx else None, r,
                      [current_frame(p, project_path, sid) for sid in g["shot_ids"]]])
-    return digest([input_fingerprint(p, project_path, profile), rows])
+    return digest([input_fingerprint(p, project_path, profile), rows, p.get("config", {}).get("missing_policy", {})])
 
 
 def current_aggregation(p, project_path):
@@ -274,8 +278,122 @@ def current_aggregation(p, project_path):
     return result if result and result.get("evidence_fingerprint") == aggregation_fingerprint(p, project_path, result["profile"]) else None
 
 
+def missing_summary(groups, decisions, config):
+    """Only confirmed necessary missing shots count, once per input video."""
+    policy = config.get("missing_policy", {})
+    minimum, ratio = policy.get("min_count", 2), policy.get("min_ratio", .2)
+    require(type(minimum) is int and minimum > 0 and number(ratio) and 0 <= ratio <= 1, "invalid missing policy")
+    result = []
+    for g in groups:
+        bad = {d["shot_id"] for d in decisions if d["shot_id"] in g["shot_ids"] and d["status"] == "missing_required"}
+        total = len(g["shot_ids"])
+        result.append(dict(source_group_id=g["id"], bad_num=len(bad), total=total, ratio=len(bad)/total,
+                           regenerate=len(bad) >= minimum and Decimal(len(bad))/Decimal(total) >= Decimal(str(ratio))))
+    return result
+
+
+def imported_post_review_plan(p, project_path, profile):
+    from storyboard import current_frame, mapping_row
+    validate(p, project_path)
+    # Content grouping has no downstream model, price, aspect or duration gate.
+    effective = dict(id="content-review", source={"kind": "inference", "ref": "按连续事件分组；旧项目按同场景连续性；每组至多12镜为当前求解器上限"},
+                     max_images=12, max_shots_per_group=12, max_fill_per_group=10, allow_multi_shot=True,
+                     min_duration=1, max_duration=1, video_cost_cny=0, missing_anchor_cost_cny=0,
+                     aspect_ratios=[p["config"].get("aspect_ratio")])
+    working, states, reviews = copy.deepcopy(p), {}, {}
+    working.update(_post_review=True, _content_review=True)
+    working["config"]["video_input_mode"] = "anchors"
+    for g in p["groups"]:
+        review = review_current(p, project_path, g["id"])
+        reviews[g["id"]] = review
+        rows = {r["shot_id"]: r for r in (review or {}).get("shot_reviews", [])}
+        assessments = {r["shot_id"]: r for r in (review or {}).get("reference_assessments", [])}
+        for sid in g["shot_ids"]:
+            row, frame = mapping_row(p, project_path, sid), current_frame(p, project_path, sid)
+            verdict = rows.get(sid, {}).get("verdict", "uncertain")
+            assessment = assessments.get(sid, {})
+            eligible = verdict in ("PASS", "absent") and assessment.get("decision") == "ai_fill" and assessment.get("derivable") is True
+            states[sid] = dict(verdict=verdict, assessment=assessment, eligible=eligible, frame=frame,
+                               mapping_status=(row or {}).get("status", "uncertain"), source_group_id=g["id"],
+                               reason=assessment.get("reason", "证据不足或已失效，待检查。"),
+                               issues=[i for i in (review or {}).get("issues", []) if sid in i["shot_ids"]])
+    working["_blocked_group_starts"] = []
+    for left, right in zip(p["groups"], p["groups"][1:]):
+        a, b = left["shot_ids"][-1], right["shot_ids"][0]
+        boundaries_pass = all(any(check["shot_id"] == neighbor and check["verdict"] == "PASS"
+                                  for check in (reviews[gid] or {}).get("boundary_checks", []))
+                              for gid, neighbor in ((left["id"], b), (right["id"], a)))
+        if not boundaries_pass or any(states[sid]["verdict"] != "PASS" for sid in (a, b)):
+            working["_blocked_group_starts"].append(next(i for i, s in enumerate(p["shots"]) if s["id"] == b))
+    protected = {sid for state in states.values() if state["eligible"] for sid in state["assessment"]["basis_shot_ids"]}
+    for s in working["shots"]:
+        state = states[s["id"]]
+        s["reference"]["path"] = state["frame"]["path"] if state["frame"] else None
+        if s["id"] in protected:
+            s["reference"]["locked"] = True
+        s["omission_assessment"] = dict(allowed=state["eligible"], risk="low" if state["eligible"] else "unknown",
+            rationale=state["reason"], source={"kind": "inference", "ref": "逐镜审查与原视频补查：" + state["source_group_id"]})
+    result = plan(working, project_path, effective)
+    # Event IDs describe narrative units, not state inheritance or visual approval.
+    # Count contiguous runs: repeated IDs separated by other events never merge.
+    event_runs = {}
+    for _, run in itertools.groupby(p["shots"], key=lambda s: (s.get("event", {}).get("id"), s["continuity_id"])):
+        run = list(run)
+        for s in run:
+            event_runs[s["id"]] = len(run)
+    original_shots = {s["id"]: s for s in p["shots"]}
+    for n, g in enumerate(result["groups"], 1):
+        old_id = g["id"]
+        first = original_shots[g["shot_ids"][0]]
+        reason = "旧项目按同场景及连续性分组；画面问题见逐镜表。"
+        if "event" in first:
+            reason = first["event"]["summary"]
+            if event_runs[first["id"]] > effective["max_shots_per_group"]:
+                reason += "；事件超过12镜，按求解器上限在事件内拆分。"
+        g.update(id=f"A{n:02d}", reason=reason)
+        g.pop("planned_duration", None)
+        g["source_group_ids"] = list(dict.fromkeys(states[sid]["source_group_id"] for sid in g["shot_ids"]))
+        for d in result["decisions"]:
+            if d["group_id"] != old_id:
+                continue
+            state = states[d["shot_id"]]
+            a, verdict = state["assessment"], state["verdict"]
+            d.update(group_id=g["id"], source_group_id=state["source_group_id"], frame=state["frame"],
+                     mapping_status=state["mapping_status"], review_verdict=verdict, issues=state["issues"])
+            can_fill = d["mode"] == "ai_fill" and state["eligible"] and all(b in g["shot_ids"] for b in a["basis_shot_ids"])
+            if can_fill:
+                d.update(mode="ai_fill", status="absent_fill_suggested_unverified" if verdict == "absent" else "ai_fill_suggested_unverified",
+                         bracket=dict(zip(("before", "after"), a["basis_shot_ids"])), reason=state["reason"])
+            elif verdict == "PASS":
+                d.update(mode="anchor", status="anchor_reviewed", bracket=None,
+                         reason=state["reason"] + ("；保留组首尾或关键状态作为参考。" if a.get("decision") == "ai_fill" else ""))
+            else:
+                status = "mismatch" if verdict == "FAIL" else "pending"
+                if verdict == "absent" and a.get("derivable") is not None:
+                    status = "missing_required"
+                note = ""
+                if status == "missing_required":
+                    note = "；必要锚点或分组约束要求保留此镜。" if a.get("derivable") is True else "；已确认缺失，无法由已有镜头可靠推导。"
+                d.update(mode="pending", status=status, bracket=None, reason=state["reason"] + note)
+    by_id = {d["shot_id"]: d for d in result["decisions"]}
+    for d in result["decisions"]:
+        if d["mode"] == "ai_fill":
+            require(all(by_id[b]["status"] == "anchor_reviewed" for b in d["bracket"].values()), "inference basis is not a retained passed anchor")
+    result.update(stage="post_review", feasible=True, profile=copy.deepcopy(profile),
+                  evidence_fingerprint=aggregation_fingerprint(p, project_path, profile),
+                  missing_summary=missing_summary(p["groups"], result["decisions"], p["config"]),
+                  limitations=["省图是推导建议，未经生成验证；视频漏镜仍保留漏镜结论。"],
+                  objective={"anchor_count": sum(d["mode"] == "anchor" for d in result["decisions"]),
+                             "fill_count": sum(d["mode"] == "ai_fill" for d in result["decisions"]),
+                             "pending_count": sum(d["mode"] == "pending" for d in result["decisions"]),
+                             "group_count": len(result["groups"])})
+    return result
+
+
 def post_review_plan(p, project_path, profile):
     """Replan a copy: never replace actual task groups or promote suggestions to proof."""
+    if p.get("config", {}).get("video_source") == "imported":
+        return imported_post_review_plan(p, project_path, profile)
     from storyboard import current_frame, mapping_row
     validate(p, project_path)
     profile_validate(profile)

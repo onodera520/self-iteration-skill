@@ -1,39 +1,50 @@
 # 内部数据与用户交付
 
-以 assets/example-project.json 建立内部项目；用户只需提供视频、脚本和资产图，不必填写 JSON。一次整理完整脚本的字段，统一 validate，按报错集中修正。路径相对项目 JSON 或使用绝对路径；模型参数独立保存。
+以 assets/example-project.json 建立内部项目。用户只提供视频、原脚本、资产图，不必填 JSON。一次整理完整脚本后统一校验，来源不明保留 unknown/inference；路径相对项目文件或使用绝对路径。
 
-## 输入与运行状态
+## 输入及内部状态
 
 - schema_version: 1、title、source_script：保留原始依据。
-- imported_videos：用户视频登记记录，含 source: user_video、target_id、version、outputs、output_hashes、group_fingerprint、duration；独立于付费 tasks。通过 import-video 登记替换文件，旧哈希结论失效。
-- user_video_prompt（旧生成模式可选，默认不需要）：原样保存用户视频提示词。单个生成组直接使用；多个生成组须填写各组 video_prompt，保留对应原文，仅作必要的分组适配。缺提示词时先补齐，不回退为自动创作。
-- assets: id/kind/description/path；kind 为 character/scene/prop。默认上传组内全部相关资产图，资产图不直接冒充抽帧成果。
-- shots: id/script/scene_id/continuity_id/duration/asset_ids/required_result。数组保持原顺序，duration 是计划秒数；脚本明确景别时填写 shot_size，并在 keyframe.description 保留构图要求。
-- facts/state_changes/intent：见 [事实规则](facts-and-planner.md)。requirements：见 [镜头要求](shot-requirements.md)。只填入口种子，不维护第二份完整状态账本。
-- requirements.provenance：每镜要求块一条来源，混合假设保守标记；facts.source/state_changes.source 的来源层级不变。
-- reference：保留旧 mode: anchor|ai_fill、path、role、reason、locked。资产试生成不读取其图片作为输入，也不把旧 mode 当作最终取舍结论。
-- groups：默认按用户视频划分的来源组；旧模式为实际生成组的 id/shot_ids/reason/version，可有 video_prompt、prompt_notes。默认按每份输入视频覆盖的连续镜头维护；必须连续覆盖所有镜头。不能拿最终聚合建议覆盖它。
-- config：workflow: video_evidence、video_source: imported、video_input_mode: assets、delivery_mode: storyboard_images、aspect_ratio、max_repair_rounds（默认且至多 3）、max_submissions（示例 0）、可选 budget_cny。新项目采用这些模式；旧项目缺 workflow 可继续兼容，进入新流程时补上此字段和缺失要求块。
-- tasks：请求、原任务 ID、状态、下载结果及哈希。保留记录用于预算和恢复。
-- board_mappings：整组匹配，绑定视频 SHA256、生成组指纹、evidence.json 哈希和每张候选图的路径/实际时间/哈希。观察存在 shots[].observation；同哈希观察复用，重新配对不能伪造观察。
-- shots[].board.selected：所选抽帧的路径、SHA256、source.kind: frame、source.time 和理由。history 保存旧选择。当前帧必须仍属于当前视频的有效 matched 候选。
-- reviews：视频组级审查，含四项 checks、覆盖、实际镜头区间、带路径/哈希/时间的 evidence.observation、问题、边界检查、reference_assessments 和 context_fingerprint。旧 board_reviews 不代替新组级证据。
-- repairs/repair_round：现有视频有限返修记录。不删历史绕过限额。
+- assets: id/kind/description/path，kind 为 character/scene/prop；仅本地比对，不上传，不冒充视频抽帧。
+- shots: id/script/scene_id/continuity_id/asset_ids/required_result；保持原镜序。imported 模式 duration 可省略或 null，若原文给定可保存但不参与审查或聚合。不估算或补填时长。shot_size 只填脚本明确景别；keyframe.description 保留关键画面要求。
+- shots[].event：新项目每镜填写 `{"id":"E03","summary":"推门、到门外开伞并追出，构成连续行动","source":{"kind":"inference","ref":"S07 推门与 S08 门外开伞追出属于连续行动"}}`。id 为非空字母、数字、下划线或连字符组成的编号；同编号 summary 一致，source 沿用 script/asset/inference 分级。event 只决定相邻聚合，不替代 scene_id/continuity_id 或状态继承。旧项目允许全部不填，不能只填部分镜头。
+- facts/state_changes/intent/omission_assessment：按 [事实规则](facts-and-planner.md)。requirements 按 [镜头要求](shot-requirements.md)，代理仅写入口种子和变化，工具计算完整状态。每镜 requirements 要求块一条 provenance，其他来源分级不变。
+- reference：保留兼容 mode: anchor|ai_fill、path、role、reason、locked。它不是新的审查结论；最终读取独立 aggregation。
+- groups：id/shot_ids/reason/version；一份输入视频对应一个来源组，列应覆盖的连续镜头。所有来源组顺序拼接必须恰好覆盖脚本一次。不得为降低漏镜占比修改应覆盖范围。
+- config：workflow: video_evidence、video_source: imported、video_input_mode: assets、delivery_mode: storyboard_images、aspect_ratio。missing_policy 可省略，默认 min_count: 2、min_ratio: 0.2；两者同时达到才建议重新生成。保留 max_repair_rounds/max_submissions/budget_cny 等旧生成安全字段，默认无付费提交。
+- imported_videos：import-video 登记 target_id/version/source: user_video/outputs/output_hashes/group_fingerprint/duration。duration 为原视频实测范围，只用于抽帧及证据定位。独立于付费 tasks，替换视频后旧证据失效。
+- board_mappings：全组 matched/uncertain/absent，候选路径、实际时间、SHA256、observation。绑定视频、来源组及 evidence.json 哈希；完整补查确认 absent 时另填 full_rescan: true、rescan.ranges 和 rescan.observation，范围须覆盖整份实测视频。缺失镜头 candidates 为空，不能伪造对应帧。
+- shots[].board.selected：选帧 path/sha256/source.kind: frame/source.time/reason；history 保存历史选择。当前有效图必须属于当前 matched 候选。
+- reviews：四项组级 checks、按顺序的 shot_reviews、coverage.shot_ids/mapping_verified/limitations、带路径/哈希/时间的 evidence.observation、issues、uncertainties、boundary_checks、reference_assessments 和 context_fingerprint。imported review_schema 为 2；不要求 actual_shots 或每镜时长区间。详见 [审查结构](review.md)。
+- shot_reviews：每镜 verdict: PASS|FAIL|uncertain|absent、reason、evidence_times；已定位镜须含七项 checks。一镜 FAIL 不妨碍其他镜独立 PASS；受影响的连续性边界仍须核对。漏镜不可 PASS。
+- reference_assessments：每镜 decision: anchor|ai_fill|pending、reason、evidence_times、derivable: true|false|null、basis_shot_ids。ai_fill 须列顺序正确的两个已有前后依据镜，依据必须独立 PASS、保留图且有有效资产支持。漏镜不填本镜帧证据，改引用完整补查和依据镜。没有可靠结论填 null，不能当作必要漏镜计数。
+- tasks/repairs/repair_round：旧生成与恢复记录仍保留。默认不用，不清空历史绕过安全限制。user_video_prompt 为旧生成模式字段，默认不需要。
 
-## 聚合建议单独保存
+## 独立聚合与失效
 
-`planner.py --post-review --output INTERNAL.json` 保存 p.aggregation；旧建议进入 aggregation_history。仅此入口消费当前组级证据，不重新发起逐镜 LLM 判断。
+planner.py --post-review 在副本内处理规则，仅保存 p.aggregation；旧建议留在 aggregation_history。原 groups、视频版本、匹配时间和 tasks 不被覆盖。
 
-建议内 groups 使用 A01 等编号、shot_ids、planned_duration、source_group_ids；decisions 包含 shot_id/group_id/source_group_id/mode/status/reason/bracket/frame。mode 是 anchor、ai_fill 或 pending；status 分别为 anchor_reviewed、ai_fill_suggested_unverified、pending。
+groups 使用 A01 等编号、shot_ids、reason、source_group_ids；imported 聚合不含 planned_duration。decisions 包含 shot_id/group_id/source_group_id/mode/status/reason/bracket/frame/mapping_status/review_verdict/issues。
 
-evidence_fingerprint 绑定脚本、用户提示词、资产、模型配置、生成视频、匹配及帧哈希、组级审查和当前选帧。来源变化后旧建议不再有效；不能靠修改状态字符串恢复通过。原 groups/tasks/board_mappings/实际时间完全保留。
+状态含义：anchor_reviewed 为检验通过保留图；ai_fill_suggested_unverified 为该镜通过且建议省图；absent_fill_suggested_unverified 为确认漏镜但可推导，未验证；mismatch 为该镜需重新生成；missing_required 为必要漏镜；pending 为证据或推导不足。mode 分别为 anchor/ai_fill/pending，不等于视频是否通过。
 
-## 交付
+missing_summary 按来源视频记录 bad_num/total/ratio/regenerate，仅内部保存。bad_num 只计 missing_required，每原镜号一次；轻微错误、可推导漏镜、待检查不计。默认 2/10 触发，2/11 与 1/3 不触发。
 
-render 只在干净目录生成 `分镜说明.md` 与保留图片的 images/。图片使用相对链接，可整体移动目录。按聚合组展示原镜号、计划时长、原脚本、图或 ai_fill 占位、简短理由；实际视频时间留在内部，不能当作计划时长。
+evidence_fingerprint 绑定脚本（含 event）、资产、源视频、匹配、帧哈希、选帧、组级审查及漏镜策略。event 同时进入来源组指纹与审查上下文；增加或修改后重新绑定输入并审查，旧结论不可复用为通过。缺失镜头的结论绑定完整补查和依据图片，不创造缺失图的哈希。来源变化后旧审查和聚合失效，不能通过改状态字符串恢复通过。
 
-ai_fill 标明“建议省图，未验证”，原脚本仍列出。pending 不省图，有可用抽帧则展示并标待检查；无图明确说明。建议失效时不复用旧 ai_fill，回到实际生成分组展示待检查。新视频更差或预算到限时可保留历史抽帧，但只能标“历史抽帧 · 待检查”，不能用旧图批准当前省图。
+## 固定交付
 
-模型约束下无可行参考图方案时保留试生成分组和所有镜头，注明需调整配置；不删镜换取可行。交付目录已有额外文件时换新目录，工具不自动清除旧成果。
+render 在干净目录生成 `分镜说明.md` 和 `images/`。保留抽帧原图供点击查看；所有镜头均生成 240×168 PNG 小分镜图（下部绘制镜号）。省图或缺图生成同尺寸文字卡，注明“可推导省图”“必要漏镜”或“待检查”。MD 使用相对图片链接，可整体移动。仅本地缩放与绘字，不生成 AI 分镜图。
 
-用户文档不附任务清单、审查日志、JSON、提示词配置、中间视频、HTML、模型费用或内部时间索引。内部记录仍必须保存以支持恢复及证据失效检查。
+MD 固定只包含两张表：
+
+1. **分组表**：分组编号、镜头顺序、简短分组理由。只聚合相邻镜头，无时长列。
+2. **逐镜表**：分组、原镜号、脚本描述、小分镜图、检验结果、图片处理、推导依据镜号、问题或修改建议。
+
+检验通过与图片处理分列。轻微错误写“该镜需重新生成”；完全不符先“待检查”并补查。漏镜可推导须同时显示“视频漏镜”和“可推导省图，未验证”，列依据镜号及具体承接理由；必要漏镜写“必要漏镜，需补生成”。旧证据不支持当前通过或错误结论。
+
+达到阈值时只在两张表下加一句“建议重新生成视频 ××，原因是必要漏镜达到阈值”。**不输出视频结论表，不展示内部 bad_num 或占比表**。未达到时，只在逐镜表列具体建议。
+
+尚无有效聚合时按来源组展示待检查。失效历史帧可展示但必须标“历史抽帧 · 待检查”，不能支持当前省图；确认漏镜不以历史帧充当当前镜头。交付目录有额外文件则换新目录，工具不删除旧成果。
+
+不交付视频、HTML、项目 JSON、规划日志或内部审查记录。缺失或错误只给建议，不触发 API。

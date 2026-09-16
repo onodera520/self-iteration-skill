@@ -163,10 +163,14 @@ def main():
                 t, path = current_video(p, args.project, g)
                 require(t and path == Path(args.video).resolve(), "video is not the current group output")
                 start = 0.0
-                for s in shots(p, g):
+                planned_shots = [] if p.get("config", {}).get("video_source") == "imported" else shots(p, g)
+                for s in planned_shots:
                     planned.append({"shot_id": s["id"], "start": start, "end": start+s["duration"]})
                     start += s["duration"]
-                data = extract(args.video, args.output, planned, args.dense_step)
+                dense_step = args.dense_step
+                if p.get("config", {}).get("video_source") == "imported" and dense_step is None:
+                    dense_step = max(.5, t["duration"] / 2999)
+                data = extract(args.video, args.output, planned, dense_step)
                 t["duration"] = data["duration"]
                 save(args.project, p)
         else:

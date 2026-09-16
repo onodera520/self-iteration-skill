@@ -1,36 +1,37 @@
-# 视频匹配、组级审查与有限返修
+# 抽帧匹配、内容校对与漏镜处理
 
-## 默认输入与问题处理
+默认用户视频＋原脚本＋资产图，不需要提示词，不调用 API，不自动修图、补图或重生成。不审查镜头时长；视频实测时长及实际 PTS 只定义检索范围和证据位置。
 
-输入为用户视频、原脚本和资产图，先通过 import-video 登记。资产用于外观及身份核对，脚本用于内容、动作和顺序核对；不需要视频提示词。确认错误时输出待检查及修改建议，不调用生成或修图。用户提供替换视频后重新登记并审查该来源组及左右边界。下文的付费返修段仅适用于用户另外启用的旧生成模式。
+## 批量匹配与补查
 
-## 批量匹配与观察复用
+import-video 登记原视频；media.py extract --project/--group 校对视频绑定，抽取均匀帧与切点邻域。脚本无时长也可直接抽帧；抽样密度不是验收标准，稀疏帧不能证明没有漏镜、短暂字幕或错误转场。
 
-先用 media.py extract 从当前视频提取镜头内部、切点前后和均匀采样帧。--project/--group 会核对当前视频并记录实测时长；计划区间只辅助定位，真实 PTS 才是匹配时间。稀疏帧不能证明动作完整、没有短暂字幕或正确转场。
-
-一次读取完整组的脚本、requirements、资产及候选帧，批量完成映射。每张图按 SHA256 记录可见 observation，后续复用；观察有遗漏或矛盾才补看同一图。一个 observation 涉及多个候选时要逐个说明对应路径或哈希，不能把不同帧的状态合成一个事实。回看视频发现新信息时追加记录。
+一次读完整组的脚本、requirements、资产和候选，批量匹配。每张图片的可见 observation 按 SHA256 保存复用；同哈希仅在观察遗漏或矛盾时补看。不同帧的状态不能合成同一帧事实。回看原视频取得新信息时追加实际查看范围与观察。
 
 ```json
 {
   "group_id": "G01", "video_sha256": "CURRENT_VIDEO_SHA256",
-  "evidence_file": "evidence/G01-v1/evidence.json",
+  "evidence_file": "evidence/G01/evidence.json",
   "shots": [
-    {"shot_id": "S01", "status": "matched", "observation": "该候选中女孩拿着唯一钥匙，男孩未接触",
-     "candidates": [{"path": "ABSOLUTE_EXTRACTED_PATH", "time": 0.25}]},
-    {"shot_id": "S02", "status": "uncertain", "observation": "当前抽样未定位观察镜头，需补查", "candidates": []},
-    {"shot_id": "S03", "status": "matched", "observation": "该候选中男孩拿稳钥匙，女孩松手",
-     "candidates": [{"path": "ABSOLUTE_EXTRACTED_PATH", "time": 4.5}]}
+    {"shot_id":"S01","status":"matched","observation":"女孩握唯一钥匙，男孩未接触",
+     "candidates":[{"path":"ABSOLUTE_EXTRACTED_PATH","time":0.25}]},
+    {"shot_id":"S02","status":"uncertain","observation":"当前未定位观察镜头，需要回看",
+     "candidates":[]},
+    {"shot_id":"S03","status":"matched","observation":"男孩拿稳钥匙，女孩松手",
+     "candidates":[{"path":"ABSOLUTE_EXTRACTED_PATH_3","time":4.5}]}
   ]
 }
 ```
 
-`storyboard.py map PROJECT.json MAPPING.json` 一次登记整组。候选路径必须来自未改动的 evidence.json，时间严格按原镜头顺序排列。发现乱序时不能交换脚本编号掩盖问题，记录 uncertain 或确认后的问题。
+storyboard.py map 一次登记整组。候选来自未改动的 evidence.json，实际时间按原镜序严格递增；不能调换脚本编号掩盖乱序。
 
-- matched：确有对应内容且有候选。只是定位成功，不代表身份、道具、动作或连续性通过。
-- uncertain：没有足够证据。先完整回看或加密抽帧，在新证据目录中保存新映射；不省图，不触发付费重试。
-- absent：补查完整原视频后确认确实没有该镜，填 full_rescan: true 和所查范围/可见依据。不是“没抽到”。随后登记有证据的问题，才可进入确认失败返修。
+- **matched**：已定位对应镜头，不代表内容通过。人物、道具或动作轻微错误仍可定位，后续单镜 FAIL。
+- **uncertain**：抽帧完全不符、尚未定位或证据不足。先回看原视频/加密抽帧；不直接判漏镜，不批准省图，不触发付费重试。
+- **absent**：完整补查原视频确认没有该镜。需 full_rescan: true、空 candidates，以及 `rescan: {"ranges":[[0,6]],"observation":"完整回看 0–6 秒，记录实际出现的镜头和缺失内容"}`。这里 6 必须换成该视频实测终点，多个范围可连续覆盖整份视频，不能留空档或缩短原视频范围。工具检查范围与绑定，实际回看由代理负责。
 
-选帧是工具操作，复用匹配判断，不再逐镜调用 LLM。将整组选择写成数组，用一次工具调用顺序登记：
+补查找到对应内容：将新抽帧存新证据目录，更新映射并替换原错误选帧，复查该镜与左右衔接。不把“抽错帧”误报为视频错误。完整补查后仍不能确认内容或时序时继续 uncertain，不伪造 absent。
+
+整组选帧在一次工具调用中顺序登记，复用匹配判断，不逐镜调用 LLM：
 
 ```python
 from previs import read, save, locked
@@ -42,86 +43,77 @@ with locked(project_path):
     save(project_path, p)
 ```
 
-数组元素为 `{"shot_id":"S01","path":"已匹配候选路径","source":{"kind":"frame","time":0.25},"reason":"对应入口关键状态"}`。缺失或不确定镜头不强选图。每镜先选一张当前候选，ai_fill 是否交付由之后的建议决定；选帧不产生费用。
+selection 为 `{"shot_id":"S01","path":"候选路径","source":{"kind":"frame","time":0.25},"reason":"关键状态清楚"}`；缺失或不确定镜头不强选图。匹配与观察不启动费用。
 
-## 按组读取与登记
+## 一次组级审查，逐镜独立结论
 
-```text
-python scripts/previs.py context PROJECT.json G01
-python scripts/previs.py review PROJECT.json GROUP_REVIEW.json
-```
+previs.py context 一次输出全组 requirements、event（新项目）、scene_id/continuity_id、资产及哈希、视频/帧/映射、选帧、左右来源组边界、review_schema: 2、context_fingerprint 和 previous_review。一次 LLM 完成全组校对、事件划分核对、连续性与取舍依据，一次 previs.py review 保存。禁止逐镜 context/review；旧 storyboard.py 单镜 review 不代替此入口。事件划分以脚本行动目标及承接为准，不随视频错误改变；若发现事件标注有误，先修正完整事件字段并重新取得绑定上下文，再保存审查，不直接复制旧 PASS。普通路径仍是整理、匹配、审查三次判断。
 
-context 一次输出整组 requirements、资产及其哈希、当前视频路径/哈希、候选和抽帧、左右组各一个边界镜头的要求及映射、context_fingerprint、previous_review。一次 LLM 判断完成整组和邻接连续性，再一次 review 保存。禁止逐镜调用旧 storyboard.py context/review。
+优先用可用视频理解能力；否则看切点前后和镜头内部连续帧。复用已有哈希观察，只补充新证据。composition 仅使用“脚本明确 shot_size/关键帧要求 → 已有画面描述 → 满足/违反/证据不足”的规则；不加开放式视觉推理或审美评判。遮挡、画外和特写裁切不等于道具消失。
 
-优先使用可用视频理解能力检查完整时序；否则看切点前后及镜头内部连续帧。复用匹配时已按哈希保存的观察，仅补充尚未观察的帧或缺失证据。previous_review 供复用观察，旧 PASS 不能直接复制到新指纹。新视频全部镜头都需重新匹配；相邻未变化组只补查边界，其内部有效观察不重看。
+四项组级 checks 为 shot/continuity/story/subtitles，取 PASS/FAIL/uncertain。检查人物、场景、道具、动作及结果、顺序、必要切镜、字幕和衔接。组级失败不会自动使所有镜头失败；逐镜结论存 shot_reviews。连续性问题须定位受影响镜头，不能一面记录该镜问题一面标 PASS。
 
-四个 checks 统一为 PASS/FAIL/uncertain：
-
-| 检查 | 覆盖内容 |
-|---|---|
-| shot | 人物身份/服装、场景、道具数量/持有者、动作与结果、关键帧阶段、画面瑕疵；composition 只比对脚本明确景别与关键帧描述 |
-| continuity | 组内相邻镜头以及左右组边界的身份、服装、空间、手别、持物和动作状态；按脚本授权变化 |
-| story | 全部原镜头覆盖、实际顺序、必要硬切、无新增剧情，主要事件是否可理解 |
-| subtitles | 视频是否出现不应有的字幕、文字或水印 |
-
-composition 使用“明确要求 → 已有画面描述 → 满足/违反/证据不足”的规则，不添加审美评分或开放式视觉推理。画外、遮挡、特写裁掉的状态不能当消失；缺乏可见证据也不能当验证。
-
-组级 review 的结构如下，示例仅列一镜，实填必须覆盖整个组及全部边界：
+以下是单镜结构示例，实际必须按原顺序填满全组及全部边界：
 
 ```json
 {
-  "group_id": "G01", "version": 1,
-  "video_sha256": "FROM_CONTEXT",
-  "context_fingerprint": "FROM_CONTEXT",
-  "checks": {"shot":"PASS","continuity":"PASS","story":"PASS","subtitles":"PASS"},
-  "coverage": {
-    "shot_ids": ["S01"], "mapping_verified": true,
-    "actual_shots": [{"shot_id":"S01","start":0,"end":2}],
-    "limitations": []
-  },
-  "evidence": [
-    {"shot_id":"S01","time":0.25,"path":"EXTRACTED_PATH","sha256":"FRAME_SHA256",
-     "observation":"可见的人物、道具状态和动作证据；补充已查看的连续时间范围"}
-  ],
-  "reference_assessments": [
-    {"shot_id":"S01","decision":"anchor","reason":"人物首次出现，保留身份与持物基线","evidence_times":[0.25]}
-  ],
-  "boundary_checks": [],
-  "issues": [], "uncertainties": []
+  "group_id":"G01","version":1,"video_sha256":"FROM_CONTEXT","context_fingerprint":"FROM_CONTEXT",
+  "checks":{"shot":"PASS","continuity":"PASS","story":"PASS","subtitles":"PASS"},
+  "coverage":{"shot_ids":["S01"],"mapping_verified":true,"limitations":[]},
+  "evidence":[{"shot_id":"S01","time":0.25,"path":"EXTRACTED_PATH","sha256":"FRAME_SHA256",
+               "observation":"可见人物、道具及状态；写明已查看的连续动作证据"}],
+  "shot_reviews":[{"shot_id":"S01","verdict":"PASS","reason":"脚本内容与衔接满足",
+    "evidence_times":[0.25],"checks":{"identity":"PASS","scene":"PASS","props":"PASS",
+    "composition":"PASS","key_state":"PASS","continuity":"PASS","cleanliness":"PASS"}}],
+  "reference_assessments":[{"shot_id":"S01","decision":"anchor","derivable":false,"basis_shot_ids":[],
+    "reason":"首次出场与持物基线，需要保留","evidence_times":[0.25]}],
+  "boundary_checks":[],"issues":[],"uncertainties":[]
 }
 ```
 
-reference_assessments 与组内原镜号顺序完全一致。decision 为 anchor/ai_fill/pending；理由说明新信息、关键状态及前后承接；evidence_times 必须引用同镜 evidence 的实际时间。关键状态/首次出场保留图；已匹配、无关键变化且可承接才候选 ai_fill；未知或失败标 pending。此处是候选意见，最终仍过规则约束，不再进行另一轮 LLM 取舍。
+shot_reviews 的 verdict：
 
-boundary_checks 对 context.boundaries 中每镜填 `{"shot_id":"S00","verdict":"PASS","observation":"前组末镜与本组首镜持物及位置相接" }`，按 context 顺序。PASS 必须有已匹配邻镜证据和 ready 要求；边界 FAIL/uncertain 同步影响 continuity。边界未生成时暂 uncertain，可以继续生成其他独立组，待边界就绪后复用观察补登记，不能因此付费重试本组。
+- PASS：matched、有当前选帧且已包含在同镜 evidence 中、requirements ready、七项检查全 PASS，无本镜未解决问题；相关组边界也通过。即使同组其他镜头失败，本镜仍可独立通过。
+- FAIL：已定位且有选帧证据，七项检查至少一项 FAIL，issues 定位本镜。轻微不符也标“该镜需重新生成”，不计必要漏镜。
+- uncertain：证据不够，列局限和需补查内容，不省图、不计数。
+- absent：必须对应完整补查后的 absent 映射，evidence_times 为空，不得在 evidence 里伪造该镜帧，issues 说明原视频缺失内容。组 story 必须 FAIL；漏镜绝不能 PASS。
 
-FAIL 的 issues 必填 id、shot_ids、time_range、severity、problem、expected、actual、evidence、repair_target、fix。severity 为 low/medium/high/critical，默认修复对象 video_shot；证据未定用 unresolved 并保持 uncertain。问题必须可定位，修复建议针对提示词或拆组，不转成独立修图请求。
+整组 PASS 仍要求全部 matched、要求 ready、四项通过、mapping_verified、每镜证据、无未决限制。不要求 actual_shots、各镜区间长度或覆盖时长验收。不可确认的动作/切镜保留 limitations/uncertainties，并使受影响镜头 uncertain；不能为通过而删记录。
 
-PASS 需全部镜头 matched、要求 ready、四项检查通过、无未决限制和疑点，且实际镜头区间按原顺序完整覆盖实测视频时长，每镜都有区间内的哈希绑定帧证据。完整视频/连续帧仍不能确认的动作或转场记入 limitations/uncertainties，不能为了得到 PASS 清空限制。工具只校验记录和绑定，不能替代理证明真的看过视频。
+reference_assessments 按镜顺序填 anchor/ai_fill/pending、reason、derivable、basis_shot_ids、evidence_times。有图评估复用 shot_reviews 的同镜 evidence_times；确认漏镜则留空，依据补查和已有镜头。
 
-## 返修、失效与停止
+- 人物首次出场、关键状态变化、空间变化、叙事转折及必要首尾优先 anchor。
+- PASS 或确认 absent 的镜头可以评估推导。若 derivable: true，decision: ai_fill，basis_shot_ids 必须是同来源组中顺序正确的前、后两个已有镜头；二者各自 PASS、有当前有效选帧且 decision: anchor，相关资产图存在。说明具体状态如何承接，不允许缺失镜头互作依据或循环推导。
+- confirmed absent 且无法推导：decision: pending、derivable: false，说明必要缺失内容；尚不能判断推导：pending、derivable: null。
+- FAIL/uncertain：pending，不批准省图。推导意见还须过首尾/关键锚点硬约束；被保护的缺失锚点仍为必要漏镜。
 
-先补查再返修，确认缺失同样不能当 ai_fill。有当前 FAIL 审查后，先 `previs.py repair PROJECT.json G01 --reason "..."` 登记，再修改该组 prompt_notes；需拆组时用 `previs.py split PROJECT.json G01 S03`。先登记再改提示词，避免令 FAIL 证据提前失效。新请求用新 ID 和对应组版本，先 dry-run 再提交。
+boundary_checks 按 context.boundaries 原顺序填 `{"shot_id":"S00","verdict":"PASS","observation":"本组首镜与前组末镜持物衔接"}`。PASS 需邻镜 matched 证据和 ready 要求；FAIL/uncertain 反映到 continuity 和本组受影响边缘镜。其他镜头可以独立通过。
 
-新视频出来后整组重新抽帧、匹配、选帧和审查。左右原组只重看与它接壤的边界镜；内部观察复用，但以完整组结构重新登记当前审查。其他有效组保持。脚本/资产/requirements/源视频/抽帧哈希/映射变化使相关旧审查与聚合结论失效；失效不等于确认失败，不直接启动收费生成。
+FAIL/absent 的 issues 必填 id、shot_ids、time_range、severity、problem、expected、actual、evidence、repair_target、fix。severity 为 low/medium/high/critical；默认 repair_target: video_shot，证据未定用 unresolved 并保持 uncertain。time_range 只是定位/回看范围。建议针对具体错误，不自动修图或重生成。
 
-每批受影响组计一轮，最多三轮，预算或提交上限先到即停。证据补查/重选帧不消耗生成轮次。超时、下载失败、submission_unknown 依 [恢复规则](generation.md) 处理，禁止清空任务或重复提交。到限保存最佳抽帧；历史帧标待检查，不能用于当前视频的 ai_fill 通过。
+## 漏镜统计、失效与停止
 
-## 三镜组端到端验收说明
+审查后规划只计“确认缺失且无法省去的必要镜头”为 bad_num，每份输入视频各计一次。默认至少 2 镜且占该视频应覆盖镜头数至少 20% 才给重新生成建议。2/10 触发；2/11 与 1/3 不触发。轻微错误、可推导漏镜及待检查不计数，不变更脚本覆盖范围规避阈值。
 
-输入：S01 女孩拿着唯一钥匙；S02 同场景观察，人物/持物无关键变化；S03 钥匙交接完成，男孩拿稳、女孩松手。示例计划 2/1.5/2 秒，实际 API 参数以选择的模型为准。
+输出仅两表，阈值触发时在两表下加一句建议，不生成视频结论表。可推导漏镜仍标“视频漏镜；可推导省图，未验证”。省图不代表原视频完整，也不删脚本位置。
+
+重选单镜帧：重看该镜及左右衔接，复用其他有效观察，以完整组结构重登记新指纹。替换整份视频：整份重新抽帧、匹配和审查，左右来源组只补查接壤边界并复用内部观察。脚本/资产/视频/依据图片/映射变更均使相关旧结论失效。previous_review 只供复用观察，不直接复制过期 PASS。
+
+证据不足先补查；仍无法确认则交付待检查并停止。默认没有生成重试。旧生成模式仅在另外获得用户生成指令后按 [生成恢复规则](generation.md) 处理：确认 FAIL 才登记 repair，再改提示词或拆组；三轮上限、预算、提交数、max_retries=1、.lock、submission_unknown 查询原任务逻辑不变，uncertain 不触发付费重试。
+
+## 三镜验收与调用数
+
+S01 女孩持钥匙；S02 同场景观察无关键变化；S03 钥匙交接完成。输入不要求时长。
 
 | LLM 判断 | 一次输入 | 一次输出 | 后续工具 |
 |---|---|---|---|
-| 1 完整脚本提取 | 三镜原文、输入视频、资产观察、时长/画幅 | 全部 facts/state_changes/requirements/块级来源 | requirements.py 计算状态；按输入视频登记来源组；import-video 保存哈希与时长；工具抽帧 |
-| 2 整组匹配 | 三镜要求、资产、整组候选及实际时间 | 三镜 matched/uncertain/absent、候选和 observation、选帧理由 | 一次 map 登记；一次工具调用顺序 select 全组；context 取得当前整组指纹 |
-| 3 整组校对与取舍依据 | context、已保存观察、必要连续帧/视频 | 四项 checks、三镜证据与参考图评估、边界/问题 | 一次 review 登记；planner --post-review；render |
+| 1 完整提取 | 完整脚本、资产、输入视频信息 | 三镜 facts/state_changes/requirements/块级来源 | 状态计算、校验、登记视频、抽帧 |
+| 2 全组匹配 | 三镜要求、全部候选及实际时间 | 三镜映射、哈希观察、选帧理由 | map、顺序 select、一次组 context |
+| 3 全组校对与推导 | context、已存观察、连续帧/视频 | 三镜独立结论、四项总检查、证据、取舍和边界 | 一次组 review、规则规划、两表渲染 |
 
-正常无缺证路径设计为 **3 次 LLM 判断**：逐镜三次提取合为一次，逐镜三次审查合为一次，取舍并入审查；原先按“3 提取＋1 组匹配＋3 审查”计为 7 次，现为 3 次。三镜旧 context/review 共 6 次工具往返改为 1 次组 context＋1 次组 review，共 2 次。API 提交/查询、抽帧、校验、选择、规划和渲染仍执行，不是三次工具调用。此为调用设计，不是实测耗时；需要补证或返修时如实增加判断，质量优先。
+正常路径由“3 提取＋1 匹配＋3 审查”的 7 次 LLM 判断合并为 3 次；旧逐镜 context/review 共 6 次工具往返变为一次组 context＋一次组 review 共 2 次。工具抽帧、登记和渲染另计。此为调用设计，不是实测耗时；补查如实增加判断，质量优先。
 
-正常规则结果：相邻组 A01 保留 S01/S03，S02 标 ai_fill 建议/未验证，有承接理由。S02 的原编号和脚本仍展示；实际生成组与任务不被 A01 覆盖。
-
-反例：模拟中间镜头未出现，先 uncertain 和补查；完整补查后才 absent、FAIL 与有限视频返修，绝不能因“省图合适”吞掉漏镜。测试还须覆盖新视频旧证据失效、邻组边界复查、预算停止、原任务恢复。合成颜色视频只测抽帧时间和顺序，不当作真实人物/交接验收。
+正常 S01/S03 保留，S02 可推导省图且标建议/未验证。模拟 S02 漏镜时先补查，确认 absent 后若前后通过且满足推导/硬规则，可给省图建议但仍保留漏镜结论；若必要或不确定则分别计数或待检查。测试覆盖轻微错误、重新抽帧纠正、混合结果、来源失效、阈值与无脚本时长；合成颜色视频只验证实际抽帧/PTS，模拟语义判断不当作真实视觉验收。
 
 ## 借鉴来源与边界
 

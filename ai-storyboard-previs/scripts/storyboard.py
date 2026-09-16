@@ -99,6 +99,9 @@ def record_mapping(p, project, data):
     require(task and data.get("video_sha256") == sha(video), "mapping needs current source video")
     evidence = read(resolve(project, data["evidence_file"]))
     require(evidence["video_sha256"] == sha(video), "evidence video mismatch")
+    if p.get("config", {}).get("video_source") == "imported":
+        require(number(evidence.get("duration")) and abs(evidence["duration"] - task["duration"]) < .001,
+                "extraction must cover the measured source video")
     require([r.get("shot_id") for r in rows] == g["shot_ids"], "mapping must include every shot in order")
     frames = {str(Path(f["path"]).resolve()): f for f in evidence["frames"]}
     last_time = -1.0
@@ -112,6 +115,15 @@ def record_mapping(p, project, data):
             require(not candidates, "unmatched shot cannot claim matched candidates")
         if row["status"] == "absent":
             require(row.get("full_rescan") is True, "absence requires rewatch/rescan of source video")
+            if p.get("config", {}).get("video_source") == "imported":
+                scan = row.get("rescan", {})
+                require(scan.get("observation") and scan.get("ranges"), "absence requires rescan ranges and observations")
+                covered = 0.0
+                for span in scan["ranges"]:
+                    require(len(span) == 2 and all(number(t) for t in span) and 0 <= span[0] <= covered + .001 and span[0] < span[1] <= evidence["duration"] + .001,
+                            "rescan ranges must cover source video without gaps")
+                    covered = max(covered, span[1])
+                require(covered >= evidence["duration"] - .001, "absence requires full source video coverage")
         for c in candidates:
             path = image_path(project, c["path"])
             frame = frames.get(str(path))
@@ -326,6 +338,26 @@ def render(p, project, out):
     return str(path)
 
 
+def thumbnail(source, destination, sid, label, warning=""):
+    """Local preview/card with a baked-in shot caption; no HTML or image API."""
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    fonts = [Path("C:/Windows/Fonts/msyh.ttc"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
+    font_path = next((f for f in fonts if f.is_file()), None)
+    font = ImageFont.truetype(str(font_path), 14) if font_path else ImageFont.load_default()
+    card = Image.new("RGB", (240, 168), "#edf0f4")
+    if source:
+        with Image.open(source) as im:
+            preview = ImageOps.contain(im.convert("RGB"), (240, 135))
+            card.paste(preview, ((240-preview.width)//2, (135-preview.height)//2))
+    draw = ImageDraw.Draw(card)
+    if not source:
+        draw.text((120, 65), label, fill="#485566", font=font, anchor="mm")
+    draw.rectangle((0, 135, 239, 167), fill="white")
+    draw.text((120, 151), sid + (" · " + warning if warning else ""), fill="#8b2222" if warning else "#253044", font=font, anchor="mm")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    card.save(destination)
+
+
 def render_aggregation(p, project, out):
     from planner import current_aggregation
     proposal = current_aggregation(p, project)
@@ -335,6 +367,8 @@ def render_aggregation(p, project, out):
     for s in p["shots"]:
         sid = s["id"]
         if decisions.get(sid, {}).get("mode") == "ai_fill":
+            continue
+        if decisions.get(sid, {}).get("mapping_status") == "absent":
             continue
         item = current_frame(p, project, sid)
         historical = False
@@ -357,7 +391,8 @@ def render_aggregation(p, project, out):
     out = Path(out).resolve()
     names = {sid: "images/" + sid + "-" + item["sha256"][:12] + Path(item["path"]).suffix.lower()
              for sid, (item, _) in chosen.items()}
-    expected = {"分镜说明.md", *names.values()}
+    thumbnails = {s["id"]: "images/thumb-" + s["id"] + "-" + digest([decisions.get(s["id"]), chosen.get(s["id"])])[:12] + ".png" for s in p["shots"]}
+    expected = {"分镜说明.md", *names.values(), *thumbnails.values()}
     require(not out.exists() or all(f.relative_to(out).as_posix() in expected for f in out.rglob("*") if f.is_file()),
             "choose a new delivery folder to preserve previous files and exclude internal records")
     out.mkdir(parents=True, exist_ok=True)
@@ -366,20 +401,49 @@ def render_aggregation(p, project, out):
         for char in "|`*[]_#":
             text = text.replace(char, "\\" + char)
         return " ".join(text.splitlines())
-    lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜，计划总时长 {sum(s['duration'] for s in p['shots']):g} 秒。", "",
-             "ai_fill 表示建议省略独立参考图，脚本镜头仍保留；省图效果尚未专项验证。", ""]
+    lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜。", "",
+             "ai_fill 仅省独立参考图，脚本镜头仍保留；可推导不等于视频已生成该镜，省图效果未经生成验证。", ""]
     if not proposal:
-        lines += ["聚合建议尚未生成或依据已变化，以下按试生成分组展示，均需检查。", ""]
+        lines += ["聚合建议尚未生成或依据已变化，以下按视频来源分组展示，需检查。", ""]
     elif not proposal["feasible"]:
-        lines += ["当前模型约束下没有可行聚合方案；以下沿用试生成分组，待调整。", ""]
+        lines += ["当前约束下没有可行聚合方案；以下沿用视频来源分组，待调整。", ""]
+    from previs import review_current
+    reviews = {g["id"]: review_current(p, project, g["id"]) for g in p["groups"]}
+    lines += ["## 分组结果", "", "| 分组编号 | 镜头顺序 | 简短分组理由 |", "| --- | --- | --- |"]
     for g in groups:
-        lines += ["## " + esc(g["id"]) + " · " + "、".join(esc(sid) for sid in g["shot_ids"]), ""]
+        lines.append(f"| {esc(g['id'])} | {' → '.join(esc(sid) for sid in g['shot_ids'])} | {esc(g.get('reason', '视频来源分组，待确认聚合。'))} |")
+    lines += ["", "## 逐镜审查与取舍", "", "| 分组 | 原镜号 | 脚本描述 | 小分镜图 | 检验结果 | 图片处理 | 推导依据镜号 | 问题或修改建议 |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for g in groups:
         for sid in g["shot_ids"]:
             s, decision = shot(p, sid), decisions.get(sid, {})
-            lines += [f"### {esc(sid)} · 计划 {s['duration']:g} 秒", "", esc(s["script"]), ""]
+            source_group = next(x for x in p["groups"] if sid in x["shot_ids"])
+            review = reviews[source_group["id"]]
+            issues = [i for i in (review or {}).get("issues", []) if sid in i["shot_ids"]]
+            code = decision.get("status")
+            status = {"anchor_reviewed": "检验通过", "ai_fill_suggested_unverified": "检验通过",
+                      "absent_fill_suggested_unverified": "视频漏镜", "missing_required": "必要漏镜，需补生成",
+                      "mismatch": "该镜需重新生成"}.get(code, "待检查")
+            # Legacy group-only reviews remain conservative and cannot imply per-shot PASS.
+            if p.get("config", {}).get("video_source") != "imported" and review and review["verdict"] == "FAIL" and issues:
+                status = "需要重新生成"
+            if decision.get("review_verdict") == "absent" and code == "pending":
+                status = "视频漏镜；推导待检查"
+            reason = decision.get("reason", "当前证据不足或已失效，需补查。")
+            if issues:
+                reason += "；" + "；".join(f"{i['time_range']} 秒：{i['problem']}；建议：{i['fix']}" for i in issues)
+            treatment, basis, label = "暂不省图", "—", "待检查"
             if decision.get("mode") == "ai_fill":
-                lines += ["**ai_fill · 建议省图，未验证**", "", esc(decision["reason"]), ""]
-                continue
+                treatment, label = "可推导省图", "可推导省图"
+                bracket = decision["bracket"]
+                basis = f"{bracket['before']} + {bracket['after']}"
+                reason += "；ai_fill · 建议省图，未验证"
+            elif code == "anchor_reviewed":
+                treatment = "保留图"
+            elif code == "missing_required":
+                label = "必要漏镜"
+            source = None
+            historical = False
             if sid in chosen:
                 item, historical = chosen[sid]
                 source = image_path(project, item["path"])
@@ -387,12 +451,19 @@ def render_aggregation(p, project, out):
                 dest.parent.mkdir(exist_ok=True)
                 if source != dest:
                     shutil.copy2(source, dest)
-                state = "历史抽帧 · 待检查" if historical else ("保留图 · 视频校对通过" if decision.get("status") == "anchor_reviewed" else "抽帧图 · 待检查")
-                lines += [f"![{esc(sid)}](<{names[sid]}>)", "", state, ""]
-            else:
-                lines += ["待检查：尚无可用的对应抽帧。", ""]
-            if decision.get("reason"):
-                lines += [esc(decision["reason"]), ""]
+            thumb = out / thumbnails[sid]
+            thumbnail(source, thumb, sid, label, "历史抽帧 · 待检查" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
+            picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
+            if source:
+                picture = f"[{picture}](<{names[sid]}>)"
+            lines.append(f"| {esc(g['id'])} | {esc(sid)} | {esc(s['script'])} | {picture} | {status} | {treatment} | {esc(basis)} | {esc(reason)} |")
+    for summary in (proposal or {}).get("missing_summary", []):
+        if summary["regenerate"]:
+            source_group = group(p, summary["source_group_id"])
+            _, video = current_video(p, project, source_group)
+            name = f"{source_group['id']}（{video.name}）" if video else source_group["id"]
+            lines += ["", f"建议重新生成视频 {esc(name)}，原因是必要漏镜达到阈值。"]
+    lines += ["", "重新生成仅为建议，本流程不调用 API；待检查先补证据。", ""]
     path = out / "分镜说明.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return str(path)

@@ -1,0 +1,840 @@
+{
+  "schema_version": 1,
+  "title": "智能镜头：雨夜追伞分镜核对",
+  "source_script": "镜头1，【时长】3s，【镜头设计】中景，跟拍，背面平视拍摄林默沿街边快步前行。\n【镜头内容】雨夜街边，林默没有伞沿着人行道快步往前走，手里握着矿泉水，雨水很快把头发压塌贴在额头，外套肩背颜色变深，他的呼吸在雨声里变得粗重。\n镜头2，【时长】2s，【镜头设计】特写，固定，侧面平视拍摄雨水打在林默发梢与领口。\n【镜头内容】雨水沿着林默的发梢成股滴落到领口，布料被浸透贴在皮肤上，他下颌线绷紧，嘴唇微微发白。\n镜头3，【时长】2s，【镜头设计】中景，固定，正面平视拍摄便利店门边的苏晴。\n【镜头内容】便利店里，苏晴仍站在门边，手里握着黑色长柄伞，湿透的外套贴在肩头，她的目光透过玻璃门追着林默远去的方向，眼神明显动摇。\n镜头4，【时长】2s，【镜头设计】特写，固定，正面平视拍摄苏晴低头看伞柄的手与指尖。\n【镜头内容】苏晴低头看着手中的黑色长柄伞，指尖沿着伞柄轻轻滑过又停住，像在确认这把伞的重量与选择。\n镜头5，【时长】2s，【镜头设计】近景，固定，正面平视拍摄苏晴透过玻璃门望向远处的眼神。\n【镜头内容】苏晴抬眼透过玻璃门看向已经走远的林默，瞳孔在门外雨幕与路灯反光里轻轻收缩，呼吸停一拍。\n镜头6，【时长】2s，【镜头设计】特写，固定，侧面平视拍摄苏晴犹豫一秒的生理细节。\n【镜头内容】苏晴的喉结轻滚，嘴唇抿紧后又松开，眉心微蹙，像把犹豫压缩成一秒钟的决定。\n镜头7，【时长】2s，【镜头设计】近景，固定，侧面平视拍摄苏晴推开便利店门的起势。\n【镜头内容】苏晴握紧黑色长柄伞，另一只手迅速推开便利店的门，门一开雨声猛地灌入，她的发梢被风吹得贴向脸侧。\n镜头8，【时长】2s，【镜头设计】中景，固定，正面平视拍摄门外落位后的苏晴冲出去追的动作。\n【镜头内容】便利店门外，苏晴已经落位在门口雨幕边缘，随即撑开黑色长柄伞冲进雨里追出去，伞面被雨点砸得连连跳动，她的脚步急促溅起水花。",
+  "assets": [
+    {
+      "id": "lin",
+      "kind": "character",
+      "description": "林默：短黑发、深灰西装外套、白色内搭、深色长裤",
+      "path": null
+    },
+    {
+      "id": "su",
+      "kind": "character",
+      "description": "苏晴：长黑发、湿透的浅棕色束腰风衣和同色长裤",
+      "path": null
+    },
+    {
+      "id": "umbrella",
+      "kind": "prop",
+      "description": "同一把黑色长柄弯钩伞",
+      "path": null
+    },
+    {
+      "id": "exterior",
+      "kind": "scene",
+      "description": "雨夜便利店门口与路边湿地",
+      "path": null
+    },
+    {
+      "id": "interior",
+      "kind": "scene",
+      "description": "便利店内货架、收银区和面向雨街的玻璃门",
+      "path": null
+    }
+  ],
+  "shots": [
+    {
+      "id": "S01",
+      "script": "镜头1，【时长】3s，【镜头设计】中景，跟拍，背面平视拍摄林默沿街边快步前行。\n【镜头内容】雨夜街边，林默没有伞沿着人行道快步往前走，手里握着矿泉水，雨水很快把头发压塌贴在额头，外套肩背颜色变深，他的呼吸在雨声里变得粗重。",
+      "scene_id": "exterior",
+      "continuity_id": "rain-chase",
+      "shot_size": "中景",
+      "asset_ids": [
+        "lin",
+        "exterior"
+      ],
+      "required_result": "林默无伞握矿泉水沿街前行，头发和外套被雨打湿。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "lin",
+          "attribute": "appearance",
+          "value": "林默：短黑发、深灰西装外套、白色内搭、深色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\林默_常态常服.png"
+          }
+        },
+        {
+          "entity": "exterior",
+          "attribute": "space",
+          "value": "雨夜便利店门口与路边湿地",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\便利店门口_雨夜外景.png"
+          }
+        }
+      ],
+      "state_changes": [
+        {
+          "entity": "lin",
+          "attribute": "hair_wet",
+          "before": false,
+          "after": true,
+          "critical": true,
+          "authorized": true,
+          "source": {
+            "kind": "script",
+            "ref": "S01 原脚本：雨夜街边，林默没有伞沿着人行道快步往前走，手里握着矿泉水，雨水很快把头发压塌贴在额头，外套肩背颜色变深，他的呼吸在雨声里变得粗重。"
+          }
+        },
+        {
+          "entity": "lin",
+          "attribute": "coat_wet",
+          "before": false,
+          "after": true,
+          "critical": true,
+          "authorized": true,
+          "source": {
+            "kind": "script",
+            "ref": "S01 原脚本：雨夜街边，林默没有伞沿着人行道快步往前走，手里握着矿泉水，雨水很快把头发压塌贴在额头，外套肩背颜色变深，他的呼吸在雨声里变得粗重。"
+          }
+        }
+      ],
+      "intent": {
+        "critical_result": false,
+        "narrative_turn": false,
+        "required_cut": false
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "建立林默无伞离开与雨中狼狈的状态",
+        "inherits_from": null,
+        "entry_state": {
+          "lin.umbrella_holder": false,
+          "lin.bottle_holder": true,
+          "lin.hair_wet": false,
+          "lin.coat_wet": false
+        },
+        "keyframe": {
+          "phase": "exit",
+          "description": "背面中景，林默无伞手持矿泉水，沿雨夜街边快步前行，外套肩背变深",
+          "state": {}
+        },
+        "must_have": [
+          "林默背面中景",
+          "手中有矿泉水且没有伞",
+          "雨夜街边"
+        ],
+        "must_not_have": [
+          "林默已撑伞",
+          "矿泉水消失"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S01 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S02",
+      "script": "镜头2，【时长】2s，【镜头设计】特写，固定，侧面平视拍摄雨水打在林默发梢与领口。\n【镜头内容】雨水沿着林默的发梢成股滴落到领口，布料被浸透贴在皮肤上，他下颌线绷紧，嘴唇微微发白。",
+      "scene_id": "exterior",
+      "continuity_id": "rain-chase",
+      "shot_size": "特写",
+      "asset_ids": [
+        "lin"
+      ],
+      "required_result": "雨水从发梢滴到领口，下颌绷紧、嘴唇发白。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "lin",
+          "attribute": "appearance",
+          "value": "林默：短黑发、深灰西装外套、白色内搭、深色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\林默_常态常服.png"
+          }
+        }
+      ],
+      "state_changes": [],
+      "intent": {
+        "critical_result": false,
+        "narrative_turn": false,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "强调林默被雨浸湿后的身体细节",
+        "inherits_from": "S01",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "侧面特写，雨水沿发梢和领口滴落，湿布料贴肤，下颌绷紧",
+          "state": {}
+        },
+        "must_have": [
+          "林默侧面特写",
+          "雨水从发梢和领口滴落"
+        ],
+        "must_not_have": [
+          "领口干燥"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S02 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S03",
+      "script": "镜头3，【时长】2s，【镜头设计】中景，固定，正面平视拍摄便利店门边的苏晴。\n【镜头内容】便利店里，苏晴仍站在门边，手里握着黑色长柄伞，湿透的外套贴在肩头，她的目光透过玻璃门追着林默远去的方向，眼神明显动摇。",
+      "scene_id": "interior",
+      "continuity_id": "rain-chase",
+      "shot_size": "中景",
+      "asset_ids": [
+        "su",
+        "interior",
+        "umbrella"
+      ],
+      "required_result": "苏晴在店内门边握黑伞，隔门目送林默，目光动摇。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "su",
+          "attribute": "appearance",
+          "value": "苏晴：长黑发、湿透的浅棕色束腰风衣和同色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\苏晴_湿透装束.png"
+          }
+        },
+        {
+          "entity": "interior",
+          "attribute": "space",
+          "value": "便利店内货架、收银区和面向雨街的玻璃门",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\便利店_雨夜内景.png"
+          }
+        },
+        {
+          "entity": "umbrella",
+          "attribute": "identity",
+          "value": "黑色弯钩长柄伞",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\黑色长柄伞_常态.png"
+          }
+        }
+      ],
+      "state_changes": [],
+      "intent": {
+        "critical_result": true,
+        "narrative_turn": false,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "建立苏晴在店内持伞、目送林默的身份和空间",
+        "inherits_from": "S02",
+        "entry_state": {
+          "su.location": "inside",
+          "su.coat_wet": true,
+          "umbrella.holder": "su",
+          "umbrella.open": false,
+          "interior.door_open": false
+        },
+        "keyframe": {
+          "phase": "exit",
+          "description": "正面中景，苏晴在店内玻璃门边握同一把黑色长柄伞，望向林默远去方向",
+          "state": {}
+        },
+        "must_have": [
+          "苏晴在店内门边正面中景",
+          "她握着同一把黑色长柄伞"
+        ],
+        "must_not_have": [
+          "苏晴已在门外",
+          "伞被换成另一把"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S03 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S04",
+      "script": "镜头4，【时长】2s，【镜头设计】特写，固定，正面平视拍摄苏晴低头看伞柄的手与指尖。\n【镜头内容】苏晴低头看着手中的黑色长柄伞，指尖沿着伞柄轻轻滑过又停住，像在确认这把伞的重量与选择。",
+      "scene_id": "interior",
+      "continuity_id": "rain-chase",
+      "shot_size": "特写",
+      "asset_ids": [
+        "su",
+        "umbrella"
+      ],
+      "required_result": "苏晴低头触摸伞柄后停住。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "su",
+          "attribute": "appearance",
+          "value": "苏晴：长黑发、湿透的浅棕色束腰风衣和同色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\苏晴_湿透装束.png"
+          }
+        },
+        {
+          "entity": "umbrella",
+          "attribute": "identity",
+          "value": "黑色弯钩长柄伞",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\黑色长柄伞_常态.png"
+          }
+        }
+      ],
+      "state_changes": [],
+      "intent": {
+        "critical_result": false,
+        "narrative_turn": false,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "用握伞的手展示犹豫",
+        "inherits_from": "S03",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "正面手部特写，苏晴低头看伞柄，指尖沿伞柄滑动后停住",
+          "state": {}
+        },
+        "must_have": [
+          "苏晴伞柄与指尖正面特写",
+          "指尖触摸伞柄"
+        ],
+        "must_not_have": [
+          "伞柄消失"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S04 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S05",
+      "script": "镜头5，【时长】2s，【镜头设计】近景，固定，正面平视拍摄苏晴透过玻璃门望向远处的眼神。\n【镜头内容】苏晴抬眼透过玻璃门看向已经走远的林默，瞳孔在门外雨幕与路灯反光里轻轻收缩，呼吸停一拍。",
+      "scene_id": "interior",
+      "continuity_id": "rain-chase",
+      "shot_size": "近景",
+      "asset_ids": [
+        "su",
+        "interior"
+      ],
+      "required_result": "苏晴抬眼透过玻璃门望向林默，呼吸停一拍。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "su",
+          "attribute": "appearance",
+          "value": "苏晴：长黑发、湿透的浅棕色束腰风衣和同色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\苏晴_湿透装束.png"
+          }
+        },
+        {
+          "entity": "interior",
+          "attribute": "space",
+          "value": "便利店内货架、收银区和面向雨街的玻璃门",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\便利店_雨夜内景.png"
+          }
+        }
+      ],
+      "state_changes": [],
+      "intent": {
+        "critical_result": false,
+        "narrative_turn": false,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "确认苏晴重新望向走远的林默",
+        "inherits_from": "S04",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "正面近景，苏晴抬眼隔玻璃门看向林默，目光改变",
+          "state": {}
+        },
+        "must_have": [
+          "苏晴隔玻璃门正面近景向远处抬眼"
+        ],
+        "must_not_have": [
+          "镜头被换成林默独自画面"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S05 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S06",
+      "script": "镜头6，【时长】2s，【镜头设计】特写，固定，侧面平视拍摄苏晴犹豫一秒的生理细节。\n【镜头内容】苏晴的喉结轻滚，嘴唇抿紧后又松开，眉心微蹙，像把犹豫压缩成一秒钟的决定。",
+      "scene_id": "interior",
+      "continuity_id": "rain-chase",
+      "shot_size": "特写",
+      "asset_ids": [
+        "su"
+      ],
+      "required_result": "苏晴抿唇、眉心微蹙后作出决定。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "su",
+          "attribute": "appearance",
+          "value": "苏晴：长黑发、湿透的浅棕色束腰风衣和同色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\苏晴_湿透装束.png"
+          }
+        }
+      ],
+      "state_changes": [],
+      "intent": {
+        "critical_result": false,
+        "narrative_turn": true,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "让犹豫转为行动决定",
+        "inherits_from": "S05",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "侧面特写，苏晴抿唇又松开、眉心微蹙的决定时刻",
+          "state": {}
+        },
+        "must_have": [
+          "苏晴侧面生理细节特写"
+        ],
+        "must_not_have": [
+          "犹豫细节被跳过"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S06 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S07",
+      "script": "镜头7，【时长】2s，【镜头设计】近景，固定，侧面平视拍摄苏晴推开便利店门的起势。\n【镜头内容】苏晴握紧黑色长柄伞，另一只手迅速推开便利店的门，门一开雨声猛地灌入，她的发梢被风吹得贴向脸侧。",
+      "scene_id": "interior",
+      "continuity_id": "rain-chase",
+      "shot_size": "近景",
+      "asset_ids": [
+        "su",
+        "interior",
+        "umbrella"
+      ],
+      "required_result": "苏晴持伞，用另一只手推开店门，雨声和风进入。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "su",
+          "attribute": "appearance",
+          "value": "苏晴：长黑发、湿透的浅棕色束腰风衣和同色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\苏晴_湿透装束.png"
+          }
+        },
+        {
+          "entity": "interior",
+          "attribute": "space",
+          "value": "便利店内货架、收银区和面向雨街的玻璃门",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\便利店_雨夜内景.png"
+          }
+        },
+        {
+          "entity": "umbrella",
+          "attribute": "identity",
+          "value": "黑色弯钩长柄伞",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\黑色长柄伞_常态.png"
+          }
+        }
+      ],
+      "state_changes": [
+        {
+          "entity": "interior",
+          "attribute": "door_open",
+          "before": false,
+          "after": true,
+          "critical": true,
+          "authorized": true,
+          "source": {
+            "kind": "script",
+            "ref": "S07 原脚本：苏晴握紧黑色长柄伞，另一只手迅速推开便利店的门，门一开雨声猛地灌入，她的发梢被风吹得贴向脸侧。"
+          }
+        }
+      ],
+      "intent": {
+        "critical_result": true,
+        "narrative_turn": true,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "展示握伞推门、从室内通向雨街的起势",
+        "inherits_from": "S06",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "侧面近景，苏晴握黑伞，用另一只手推开店门",
+          "state": {}
+        },
+        "must_have": [
+          "苏晴侧面近景持伞推开玻璃门"
+        ],
+        "must_not_have": [
+          "苏晴尚未推门却已在门外"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S07 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S08",
+      "script": "镜头8，【时长】2s，【镜头设计】中景，固定，正面平视拍摄门外落位后的苏晴冲出去追的动作。\n【镜头内容】便利店门外，苏晴已经落位在门口雨幕边缘，随即撑开黑色长柄伞冲进雨里追出去，伞面被雨点砸得连连跳动，她的脚步急促溅起水花。",
+      "scene_id": "exterior",
+      "continuity_id": "rain-chase",
+      "shot_size": "中景",
+      "asset_ids": [
+        "su",
+        "exterior",
+        "umbrella"
+      ],
+      "required_result": "苏晴先在门外落位，再撑开伞冲进雨中追赶，踩起水花。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始保留候选；视频组审查后决定聚合与省图。",
+        "locked": false
+      },
+      "facts": [
+        {
+          "entity": "su",
+          "attribute": "appearance",
+          "value": "苏晴：长黑发、湿透的浅棕色束腰风衣和同色长裤",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\苏晴_湿透装束.png"
+          }
+        },
+        {
+          "entity": "exterior",
+          "attribute": "space",
+          "value": "雨夜便利店门口与路边湿地",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\便利店门口_雨夜外景.png"
+          }
+        },
+        {
+          "entity": "umbrella",
+          "attribute": "identity",
+          "value": "黑色弯钩长柄伞",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "C:\\Users\\admin\\Downloads\\黑色长柄伞_常态.png"
+          }
+        }
+      ],
+      "state_changes": [
+        {
+          "entity": "su",
+          "attribute": "location",
+          "before": "inside",
+          "after": "outside",
+          "critical": true,
+          "authorized": true,
+          "source": {
+            "kind": "script",
+            "ref": "S08 原脚本：便利店门外，苏晴已经落位在门口雨幕边缘，随即撑开黑色长柄伞冲进雨里追出去，伞面被雨点砸得连连跳动，她的脚步急促溅起水花。"
+          }
+        },
+        {
+          "entity": "umbrella",
+          "attribute": "open",
+          "before": false,
+          "after": true,
+          "critical": true,
+          "authorized": true,
+          "source": {
+            "kind": "script",
+            "ref": "S08 原脚本：便利店门外，苏晴已经落位在门口雨幕边缘，随即撑开黑色长柄伞冲进雨里追出去，伞面被雨点砸得连连跳动，她的脚步急促溅起水花。"
+          }
+        }
+      ],
+      "intent": {
+        "critical_result": true,
+        "narrative_turn": true,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": null,
+        "risk": "unknown",
+        "rationale": "视频审查前不批准省图。",
+        "source": {
+          "kind": "inference",
+          "ref": "初始待审查"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "确认苏晴到门外撑伞追出",
+        "inherits_from": "S07",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "正面中景，苏晴已在门外雨幕边缘撑开黑伞并冲出去追赶",
+          "state": {}
+        },
+        "must_have": [
+          "苏晴在门外正面中景",
+          "门外落位后撑开伞并追出"
+        ],
+        "must_not_have": [
+          "从店内背面直接拍成已撑伞出门，缺少门外撑伞动作"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S08 原脚本及相邻镜头连续事件；伞在镜头8才撑开"
+          }
+        ]
+      }
+    }
+  ],
+  "groups": [
+    {
+      "id": "G01",
+      "version": 1,
+      "shot_ids": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S07",
+        "S08"
+      ],
+      "reason": "用户八镜脚本；仅测试事件规划，视觉审查记录为模拟"
+    }
+  ],
+  "config": {
+    "workflow": "video_evidence",
+    "video_source": "imported",
+    "video_input_mode": "assets",
+    "delivery_mode": "storyboard_images",
+    "aspect_ratio": "16:9",
+    "max_repair_rounds": 3,
+    "max_submissions": 0
+  }
+}

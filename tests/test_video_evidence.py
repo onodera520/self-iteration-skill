@@ -116,11 +116,13 @@ class VideoEvidenceTests(fixtures.Base):
             self.assertEqual(self.p[key], original[key])
         out = self.path.parent / "delivery"
         document = Path(boards.render(self.p, self.path, out)).read_text(encoding="utf-8")
-        self.assertIn("ai_fill · 建议省图，未验证", document)
+        self.assertIn("建议省图，未验证", document)
+        self.assertIn("| 检验通过 | 可推导省图 | S01 + S03 |", document)
         self.assertIn(self.p["shots"][1]["script"], document)
-        self.assertLess(document.index("### S01"), document.index("### S02"))
-        self.assertLess(document.index("### S02"), document.index("### S03"))
-        self.assertEqual(len(list(out.rglob("*.png"))), 2)
+        self.assertLess(document.index("| S01 |"), document.index("| S02 |"))
+        self.assertLess(document.index("| S02 |"), document.index("| S03 |"))
+        self.assertEqual(len(list(out.rglob("*.png"))), 5)
+        self.assertEqual(len(list(out.rglob("thumb-*.png"))), 3)
         self.assertEqual({p.suffix for p in out.rglob("*") if p.is_file()}, {".png", ".md"})
         self.assertIn("](<images/", document)
         self.assertNotIn("fingerprint", document)
@@ -134,6 +136,9 @@ class VideoEvidenceTests(fixtures.Base):
                 core.record_review(self.p, self.path, r)
                 proposal = planner.post_review_plan(self.p, self.path, self.profile)
                 self.assertEqual(proposal["decisions"][1]["mode"], "pending")
+                report = Path(boards.render(self.p, self.path, self.path.parent / ("report-" + status))).read_text(encoding="utf-8")
+                row = next(line for line in report.splitlines() if "| S03 |" in line)
+                self.assertIn("| 待检查 |" if status == "uncertain" else "| 需要重新生成 |", row)
                 if status == "uncertain":
                     with self.assertRaisesRegex(ValueError, "confirmed FAIL"):
                         core.repair(self.p, self.path, ["G01"], "not authorized by uncertain")
@@ -158,7 +163,7 @@ class VideoEvidenceTests(fixtures.Base):
         self.assertIsNone(boards.current_mapping(self.p, self.path, "G01"))
         self.assertTrue(all(boards.current_frame(self.p, self.path, sid) is None for sid in ("S01", "S02", "S03")))
         old_output = Path(boards.render(self.p, self.path, self.path.parent / "pending")).read_text(encoding="utf8")
-        self.assertIn("历史抽帧 · 待检查", old_output)
+        self.assertIn("待检查", old_output)
         self.assertNotIn("**ai_fill", old_output)
         self.mapping()
         self.assertIsNone(core.review_current(self.p, self.path, "G01"))
@@ -320,12 +325,18 @@ class VideoEvidenceTests(fixtures.Base):
         self.assertFalse(evidence["verified"])
         self.assertAlmostEqual(evidence["duration"], 5.5, places=1)
         self.p["config"]["video_source"] = "imported"
+        for shot in self.p["shots"]:
+            shot.pop("duration")
         before_tasks = copy.deepcopy(self.p.get("tasks", {}))
         core.save(self.path, self.p)
         imported = subprocess.run([sys.executable, str(fixtures.ROOT / "ai-storyboard-previs/scripts/previs.py"),
             "import-video", str(self.path), "G01", str(video)], capture_output=True, text=True, encoding="utf8")
         self.assertEqual(imported.returncode, 0, imported.stderr)
         self.p = core.read(self.path)
+        extracted = subprocess.run([sys.executable, str(fixtures.ROOT / "ai-storyboard-previs/scripts/media.py"),
+            "extract", str(video), str(self.path.parent / "cli-no-duration"), "--project", str(self.path), "--group", "G01"], capture_output=True, text=True, encoding="utf8")
+        self.assertEqual(extracted.returncode, 0, extracted.stderr)
+        self.assertTrue(core.read(self.path.parent / "cli-no-duration/evidence.json")["frames"])
         self.assertEqual(self.p.get("tasks", {}), before_tasks)
         self.assertEqual(self.p["imported_videos"][0]["source"], "user_video")
         self.assertAlmostEqual(self.p["imported_videos"][0]["duration"], 5.5, places=1)
