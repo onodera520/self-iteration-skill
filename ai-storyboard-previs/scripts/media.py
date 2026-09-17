@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from evidence_runtime import evidence_operation
 from previs import (read, save, locked, validate, require, resolve, sha, group, shots,
                     current_video, delivery_fingerprint)
 
@@ -40,47 +42,152 @@ def duration(info):
     return float(info["format"]["duration"])
 
 
-def extract(path, out, planned=None, dense_step=None):
+def dense_ranges(value):
+    """CLI parser; bounds against actual video duration are checked after probing."""
+    try:
+        span = [float(t) for t in value.split(":")]
+        if len(span) != 2 or not all(math.isfinite(t) for t in span) or not 0 <= span[0] < span[1]:
+            raise ValueError()
+        return span
+    except ValueError:
+        raise argparse.ArgumentTypeError("dense-range must be START:END with 0 <= START < END")
+
+
+def contact_sheets(frames, out, prefix="contact"):
+    """Navigation only; keep the original full-resolution evidence for inspection."""
+    from PIL import Image, ImageDraw, ImageOps
+    result = []
+    for offset in range(0, len(frames), 24):
+        page = frames[offset:offset + 24]
+        sheet = Image.new("RGB", (4 * 256, math.ceil(len(page) / 4) * 168), "#202020")
+        draw = ImageDraw.Draw(sheet)
+        for i, frame in enumerate(page):
+            x, y = (i % 4) * 256, (i // 4) * 168
+            with Image.open(frame["path"]) as original:
+                thumb = ImageOps.contain(original.convert("RGB"), (248, 140))
+                sheet.paste(thumb, (x + (256 - thumb.width) // 2, y))
+            draw.text((x + 4, y + 144), f'{offset+i+1} | {frame["time"]:.3f}s | n={frame["frame_index"]}', fill="white")
+        file = out / f"{prefix}_{offset // 24 + 1:03d}.jpg"
+        sheet.save(file, quality=90)
+        result.append({"path": str(file), "frame_paths": [f["path"] for f in page]})
+    return result
+
+
+def extract(path, out, planned=None, dense_step=None, ranges=None, base_evidence=None, full_contact_sheet=False):
+    out = Path(out).resolve()
+    require(not (out / "evidence.json").exists(), "choose a new evidence directory; preserve prior evidence manifests")
+    # Check source and reused evidence again before publishing the new manifest.
+    with evidence_operation():
+        data = _extract(path, out, planned, dense_step, ranges, base_evidence, full_contact_sheet)
+    save(out / "evidence.json", data)
+    return data
+
+
+def _extract(path, out, planned, dense_step, ranges, base_evidence, full_contact_sheet):
     path, out = Path(path).resolve(), Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    video_hash = sha(path)
     info = probe(path, frames=True)
     pts = [float(f["best_effort_timestamp_time"]) for f in info["frames"] if "best_effort_timestamp_time" in f]
     require(pts and pts == sorted(pts), "monotonic frame PTS required")
     start_pts = pts[0]
     times = [t - start_pts for t in pts]
     length = duration(info)
+    requested = ranges or []
+    require(isinstance(requested, (list, tuple)), "dense ranges must be a list")
+    for span in requested:
+        require(isinstance(span, (list, tuple)) and len(span) == 2
+                and all(isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t) for t in span)
+                and 0 <= span[0] < span[1] <= length, "dense range must lie within source video duration")
+    merged = []
+    for a, b in sorted(requested):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    step = dense_step if dense_step is not None else (.2 if merged else None)
+    if step is not None:
+        require(isinstance(step, (int, float)) and not isinstance(step, bool)
+                and math.isfinite(step) and step > 0, "dense-step must be finite and positive")
+    sampled_ranges = merged or ([[0, length]] if step is not None else [])
+    if sampled_ranges:
+        require(sum(math.ceil((b-a)/step) + 1 for a, b in sampled_ranges) <= 3000,
+                "dense sampling exceeds 3000 frames; narrow disputed ranges or increase dense-step")
+    previous = {}
+    base = read(Path(base_evidence).resolve()) if base_evidence else None
+    if base:
+        require(base.get("video_sha256") == video_hash, "base evidence video mismatch")
+        require(abs(base["duration"] - length) < .001 and abs(base["pts_origin"] - start_pts) < .001,
+                "base evidence timeline mismatch")
+        for frame in base["frames"]:
+            n = frame["frame_index"]
+            require(type(n) is int and 0 <= n < len(pts) and n not in previous,
+                    "invalid base frame index")
+            require(abs(frame["pts"] - pts[n]) < .000001 and abs(frame["time"] - times[n]) < .000001,
+                    "base frame timestamp mismatch")
+            require(Path(frame["path"]).is_absolute() and sha(frame["path"]) == frame["sha256"],
+                    "base evidence frame changed")
+            previous[n] = frame
     # Scene scores are candidates only, never semantic hard-cut proof.
-    scan = command([binary("ffmpeg"), "-hide_banner", "-i", path, "-vf", "select='gt(scene,0.30)',showinfo", "-an", "-f", "null", "-"])
-    candidates = [float(x) - start_pts for x in re.findall(r"pts_time:([0-9.eE+-]+)", scan.stderr)]
-    targets = [0, length / 2, max(0, length - .05)]
+    if base is not None and "candidate_cuts" in base:
+        candidates = base["candidate_cuts"]
+        require(all(isinstance(t, (int, float)) and math.isfinite(t) and 0 <= t <= length for t in candidates),
+                "invalid base cut candidates")
+    else:
+        scan = command([binary("ffmpeg"), "-hide_banner", "-i", path, "-vf", "select='gt(scene,0.30)',showinfo", "-an", "-f", "null", "-"])
+        candidates = [float(x) - start_pts for x in re.findall(r"pts_time:([0-9.eE+-]+)", scan.stderr)]
+    boundaries = sorted({0.0, length, *(c for c in candidates if 0 < c < length)})
+    segments = [{"start": a, "end": b} for a, b in zip(boundaries, boundaries[1:])]
+    targets = [0, length / 4, length / 2, 3 * length / 4, max(0, length - .05)]
+    targets += [(s["start"] + s["end"]) / 2 for s in segments]
     spans = planned or []
     for span in spans:
         a, b = span["start"], span["end"]
         targets += [a, (a+b)/2, max(a, b-.05)]
         targets += [max(0, a-.05), min(length, a+.05)]
     targets += [max(0, c+d) for c in candidates for d in (-.08, 0, .08)]
-    if dense_step is not None:
-        require(dense_step > 0, "dense-step must be positive")
-        require(length / dense_step <= 3000, "dense sampling exceeds 3000 frames; inspect a shorter clip")
-        targets += [n * dense_step for n in range(int(length/dense_step)+1)]
+    for a, b in sampled_ranges:
+        targets += [a + n * step for n in range(math.ceil((b-a)/step))] + [b]
     indexes = set()
     for target in targets:
         pos = bisect.bisect_left(times, target)
         nearest = min((i for i in (pos-1, pos) if 0 <= i < len(times)), key=lambda i: abs(times[i]-target))
         indexes.add(nearest)
-    indexes = sorted(indexes)
+    indexes = sorted(indexes - previous.keys())
     selection = "+".join(f"eq(n\\,{i})" for i in indexes)
     # Fresh hash-specific evidence folder prevents stale frame files being mistaken for this extraction.
-    folder = out / (sha(path)[:16] + "-" + os.urandom(3).hex())
+    folder = out / (video_hash[:16] + "-" + os.urandom(3).hex())
     folder.mkdir()
-    command([binary("ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", path, "-vf", f"select={selection}", "-fps_mode", "passthrough", folder / "frame_%04d.png"])
+    if indexes:
+        command([binary("ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", path, "-vf", f"select={selection}", "-fps_mode", "passthrough", folder / "frame_%04d.png"])
     files = sorted(folder.glob("frame_*.png"))
     require(len(files) == len(indexes), "extracted frame/PTS count mismatch")
-    data = {"video": str(path), "video_sha256": sha(path), "duration": length, "pts_origin": start_pts,
-            "planned_spans": spans, "candidate_cuts": candidates, "verified": False,
-            "limitations": ["Extraction is not visual inspection. Planned boundaries and scene candidates are not confirmed cuts."],
-            "frames": [{"path": str(f), "sha256": sha(f), "frame_index": n, "pts": pts[n], "time": times[n]} for f, n in zip(files, indexes)]}
-    save(out / "evidence.json", data)
+    frames = dict(previous)
+    frames.update({n: {"path": str(f), "sha256": sha(f), "frame_index": n, "pts": pts[n], "time": times[n]} for f, n in zip(files, indexes)})
+    data = {"video": str(path), "video_sha256": video_hash, "duration": length, "pts_origin": start_pts,
+            "planned_spans": spans, "candidate_cuts": candidates, "candidate_segments": segments, "verified": False,
+            "sampling": {"mode": "local_dense" if merged else ("full_dense" if step is not None else "sparse"),
+                         "dense_step": step, "dense_ranges": sampled_ranges, "new_frames": len(indexes)},
+            "limitations": ["Extraction is not visual inspection. Planned boundaries and scene candidates are not confirmed cuts.",
+                            "Sparse or dense samples alone do not establish absence or verify actions, subtitles or transitions."],
+            "frames": [frames[n] for n in sorted(frames)]}
+    if base_evidence:
+        data["base_evidence"] = {"path": str(Path(base_evidence).resolve()), "sha256": sha(base_evidence)}
+    fresh = [frames[n] for n in indexes]
+    data["new_frame_paths"] = [f["path"] for f in fresh]
+    data["contact_sheet_scope"] = "new_frames" if base else "all_frames"
+    data["contact_sheets"] = contact_sheets(fresh if base else data["frames"], out)
+    data["full_contact_sheets"] = (contact_sheets(data["frames"], out, "full_contact")
+                                   if base and full_contact_sheet else ([] if base else data["contact_sheets"]))
+    # Optional navigation context, not a claim that these frames are matched or reviewed.
+    context = {}
+    if base and fresh:
+        for a, b in sampled_ranges:
+            before = [f for f in previous.values() if f["time"] < a]
+            after = [f for f in previous.values() if f["time"] > b]
+            for f in ([max(before, key=lambda f: f["time"])] if before else []) + ([min(after, key=lambda f: f["time"])] if after else []):
+                context[f["frame_index"]] = f
+    data["context_contact_sheets"] = contact_sheets([context[n] for n in sorted(context)], out, "context")
     return data
 
 
@@ -142,6 +249,9 @@ def main():
     ex.add_argument("--project")
     ex.add_argument("--group")
     ex.add_argument("--dense-step", type=float)
+    ex.add_argument("--dense-range", type=dense_ranges, action="append", default=[], help="START:END seconds; repeat for disputed intervals (default step .2s)")
+    ex.add_argument("--base-evidence", help="Reuse unchanged extracted frames; output must be a new directory")
+    ex.add_argument("--full-contact-sheet", action="store_true", help="Also render all old and new frames for tracing")
     ass = sub.add_parser("assemble")
     ass.add_argument("project")
     ass.add_argument("output")
@@ -167,15 +277,18 @@ def main():
                 for s in planned_shots:
                     planned.append({"shot_id": s["id"], "start": start, "end": start+s["duration"]})
                     start += s["duration"]
-                dense_step = args.dense_step
-                if p.get("config", {}).get("video_source") == "imported" and dense_step is None:
-                    dense_step = max(.5, t["duration"] / 2999)
-                data = extract(args.video, args.output, planned, dense_step)
+                data = extract(args.video, args.output, planned, args.dense_step, args.dense_range, args.base_evidence, args.full_contact_sheet)
+                if args.base_evidence and p.get("config", {}).get("video_source") == "imported":
+                    from incremental import prepare
+                    prepare(p, args.project, args.group, Path(args.output) / "evidence.json", Path(args.output) / "incremental_review.json")
                 t["duration"] = data["duration"]
                 save(args.project, p)
         else:
-            data = extract(args.video, args.output, dense_step=args.dense_step)
-        print(json.dumps({"frames": len(data["frames"]), "duration": data["duration"], "verified": False}))
+            data = extract(args.video, args.output, dense_step=args.dense_step, ranges=args.dense_range, base_evidence=args.base_evidence, full_contact_sheet=args.full_contact_sheet)
+        print(json.dumps({"frames": len(data["frames"]), "new_frames": data["sampling"]["new_frames"],
+                          "contact_sheet_scope": data["contact_sheet_scope"], "contact_sheets": data["contact_sheets"],
+                          "incremental_review": str(Path(args.output).resolve() / "incremental_review.json") if args.base_evidence and args.project and p.get("config", {}).get("video_source") == "imported" else None,
+                          "duration": data["duration"], "verified": False}))
 
 
 if __name__ == "__main__":

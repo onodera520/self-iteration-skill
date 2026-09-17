@@ -21,7 +21,7 @@ class ImportedReviewTests(fixtures.Base):
         self.p['groups'] = self.p['groups'][:1]
         s = self.p['shots'][1]
         s.update(script='同场景中景观察，女孩仍握钥匙。', shot_size='中景', required_result='持物无关键变化')
-        s['requirements'].update(purpose='观察关系，无关键状态变化', must_have=['女孩仍持有钥匙', '同场景中景'])
+        s['requirements'].update(purpose='观察关系，无关键状态变化', must_have=['女孩仍持有钥匙', '两人在同一场景观察对方'])
         s['requirements']['keyframe']['description'] = '中景，两人观察对方，女孩仍握钥匙'
         s['requirements']['provenance'][0]['source'] = 'S02 同场景观察，无持物变化'
         self.p['source_script'] = ' '.join(s['id'] + ' ' + s['script'] for s in self.p['shots'])
@@ -61,7 +61,7 @@ class ImportedReviewTests(fixtures.Base):
     def review_data(self, verdicts=None, middle_derivable=True, gid='G01'):
         ctx = core.video_context(self.p, self.path, gid)
         r = dict(grouping_checked=True, group_id=gid, version=ctx['version'], video_sha256=ctx['video_sha256'], context_fingerprint=ctx['context_fingerprint'],
-            checks={c:'PASS' for c in ('shot','continuity','story','subtitles')},
+            checks={c:'PASS' for c in ('shot','continuity','story')},
             coverage=dict(shot_ids=core.group(self.p,gid)['shot_ids'], mapping_verified=True, limitations=[]),
             evidence=[], shot_reviews=[], reference_assessments=[], issues=[], uncertainties=[], asset_comparisons=[],
             boundary_checks=[dict(shot_id=b['shot_id'],verdict='PASS',observation='SIMULATED boundary inspected') for b in ctx['boundaries']])
@@ -75,7 +75,7 @@ class ImportedReviewTests(fixtures.Base):
             checks = {c:'PASS' for c in boards.CHECKS}
             if verdict == 'FAIL':
                 checks['props'] = 'FAIL'
-            r['shot_reviews'].append(dict(shot_id=sid,verdict=verdict,checks=checks,evidence_times=times,reason='SIMULATED '+verdict))
+            r['shot_reviews'].append(dict(shot_id=sid,verdict=verdict,checks=checks,evidence_times=times,reason='SIMULATED '+verdict, identity_reason='SIMULATED character/action relationship judged against story'))
             scope = []
             if verdict != 'absent':
                 aids = next(s['asset_ids'] for s in self.p['shots'] if s['id']==sid)
@@ -85,7 +85,7 @@ class ImportedReviewTests(fixtures.Base):
                     for aspect in ('wardrobe','appearance'):
                         scope.append(dict(asset_id=asset['id'],aspect=aspect,required=True,reason='SIMULATED relevant structure'))
                         r['asset_comparisons'].append(dict(id=sid+'-'+asset['id']+'-'+aspect,shot_id=sid,asset_id=asset['id'],
-                            asset_sha256=asset['sha256'],aspect=aspect,evidence_refs=[copy.deepcopy(frame)] if times else [],
+                            asset_sha256=asset['sha256'],aspect=aspect,story_requirement='SIMULATED explicit identity clue', story_impact='SIMULATED required actor identity unclear' if not times else '',evidence_refs=[copy.deepcopy(frame)] if times else [],
                             condition_factors=['SIMULATED rain'],stable_matches=['SIMULATED stable structure'] if times else [],
                             stable_conflicts=[],decision='PASS' if times else 'uncertain',
                             unobservable_features=[] if times else ['SIMULATED necessary structure invisible'],
@@ -100,9 +100,9 @@ class ImportedReviewTests(fixtures.Base):
                 r['checks']['story'] = 'FAIL'
                 r['issues'].append(dict(id='issue-'+sid,shot_ids=[sid],time_range=[0,6],severity='medium',
                     asset_ids=[],asset_comparison_ids=[],
-                    problem='必要画面未出现' if verdict=='absent' else '画面钥匙颜色与脚本轻微不符', expected='脚本要求',
+                    problem='必要画面未出现' if verdict=='absent' else '交接前钥匙持有者错误，破坏交接因果', expected='脚本要求',
                     actual='SIMULATED discrepancy',evidence=['SIMULATED full rescan' if verdict=='absent' else frame['path']],
-                    repair_target='video_shot',fix='先评估推导，必要时补生成' if verdict=='absent' else '重新生成该镜，修正钥匙颜色'))
+                    repair_target='video_shot',fix='先评估推导，必要时补生成' if verdict=='absent' else '重新生成该镜，修正钥匙持有者'))
             if verdict=='uncertain':
                 checks['identity']='uncertain'
                 r['shot_reviews'][-1]['followup']='Inspect more same-shot continuous frames'
@@ -131,9 +131,13 @@ class ImportedReviewTests(fixtures.Base):
         self.assertIn('| 总时长 |',text)
         self.assertIn('| 镜头时长 |',text)
         self.assertNotIn('视频结论',text)
-        self.assertIn('| 检验通过 | 可推导省图 | S01 + S03 |',text)
-        self.assertEqual(len(list(out.rglob('*.png'))),5)
-        for sid in ('S01','S02','S03'):
+        self.assertIn('| 检验通过 | 建议省图，未验证 | S01 + S03 |',text)
+        self.assertEqual(len(list(out.rglob('*.png'))),4)
+        row=next(l for l in text.splitlines() if '| S02 |' in l)
+        self.assertIn('| 可推导生成 |',row)
+        self.assertNotIn('![',row)
+        self.assertFalse(list(out.glob('images/*S02*')))
+        for sid in ('S01','S03'):
             thumb = next(out.glob('images/thumb-'+sid+'-*.png'))
             self.assertIn(thumb.name,text)
             with Image.open(thumb) as im:
@@ -148,18 +152,35 @@ class ImportedReviewTests(fixtures.Base):
         self.assertEqual(result['missing_summary'][0]['bad_num'],0)
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
         row=next(l for l in text.splitlines() if '| S02 |' in l)
-        self.assertIn('| 视频漏镜 | 可推导省图 | S01 + S03 |',row)
+        self.assertIn('| 视频漏镜 | 建议省图，未验证 | S01 + S03 |',row)
         self.assertIn('未验证',row)
+        self.assertIn('| 可推导生成 |',row)
+        self.assertNotIn('![',row)
+        self.assertFalse(list((self.path.parent/'delivery/images').glob('*S02*')))
+        self.assertEqual(core.review_current(self.p,self.path,'G01')['checks']['story'],'FAIL')
         self.assertNotIn('建议重新生成视频',text)
 
-    def test_slight_error_is_local_failure_not_missing(self):
+    def test_final_anchor_overrides_fill_candidate_and_keeps_picture(self):
+        self.p['shots'][1]['reference']['locked']=True
+        self.mapping()
+        result=self.finish()
+        self.assertEqual(self.p['reviews'][-1]['reference_assessments'][1]['decision'],'ai_fill')
+        self.assertEqual(result['decisions'][1]['mode'],'anchor')
+        out=self.path.parent/'delivery'
+        document=Path(boards.render(self.p,self.path,out)).read_text(encoding='utf8')
+        row=next(l for l in document.splitlines() if '| S02 |' in l)
+        self.assertIn('![',row)
+        self.assertNotIn('| 可推导生成 |',row)
+        self.assertTrue(list(out.glob('images/thumb-S02-*')))
+
+    def test_plot_error_is_local_failure_not_missing(self):
         self.mapping()
         result=self.finish(self.review_data({'S02':'FAIL'}))
         self.assertEqual([d['status'] for d in result['decisions']],['anchor_reviewed','mismatch','anchor_reviewed'])
         self.assertEqual(result['missing_summary'][0]['bad_num'],0)
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
         self.assertIn('| 该镜需重新生成 |',text)
-        self.assertIn('钥匙颜色',text)
+        self.assertIn('钥匙持有者',text)
 
     def test_required_absence_and_unknown_inferability_are_distinct(self):
         self.mapping({'S02':'absent','S03':'absent'})

@@ -163,7 +163,7 @@ class NarrativeIntegrationTests(imported.fixtures.Base):
         self.assertFalse(ctx['review_scope']['dialogue_lip_sync'])
         self.assertFalse(ctx['review_scope']['duration_accuracy'])
         self.assertTrue(ctx['review_scope']['visual_actions'])
-        self.assertTrue(ctx['review_scope']['subtitles'])
+        self.assertFalse(ctx['review_scope']['subtitles'])
         r=self.review_data();r.pop('grouping_checked')
         with self.assertRaisesRegex(ValueError,'grouping'):core.record_review(self.p,self.path,r)
         r=self.review_data()
@@ -174,7 +174,7 @@ class NarrativeIntegrationTests(imported.fixtures.Base):
             r['shot_reviews'][1]['checks']={c:('FAIL' if c==check else 'PASS') for c in boards.CHECKS}
             if check=='identity':
                 c=next(c for c in r['asset_comparisons'] if c['shot_id']=='S02')
-                c.update(decision='FAIL',stable_conflicts=[dict(feature='collar',expected='lapel',observed='zipper collar',environment_exclusion='lighting cannot replace fasteners')])
+                c.update(decision='FAIL',story_impact='SIMULATED disguise identity clue contradicted',stable_conflicts=[dict(feature='collar',expected='lapel',observed='zipper collar',environment_exclusion='lighting cannot replace fasteners')])
                 r['issues'][0].update(asset_ids=[c['asset_id']],asset_comparison_ids=[c['id']])
             core.record_review(self.p,self.path,r)
             result=planner.post_review_plan(self.p,self.path,{})

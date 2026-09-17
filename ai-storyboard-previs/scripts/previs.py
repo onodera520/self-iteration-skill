@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sys
 import uuid
+from evidence_runtime import sha, read_json, verified_read, memo_read
 
 BASE_PROMPT = "参考已有分镜图，严格按照分镜脚本生成一段快速切镜的视频，每个分镜不需要很大的动作幅度。没有台词，没有音乐，不要出现字幕。每个分镜硬切转场。"
 
@@ -25,7 +26,7 @@ def number(value):
 
 
 def read(path):
-    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    return read_json(path)
 
 
 def save(path, data):
@@ -54,14 +55,6 @@ def locked(path):
 
 def resolve(project_path, value):
     return (Path(project_path).resolve().parent / value).resolve()
-
-
-def sha(path):
-    h = hashlib.sha256()
-    with Path(path).open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def digest(value):
@@ -137,6 +130,7 @@ def validate(p, project_path):
     return {"shots": len(p["shots"]), "groups": len(p["groups"]), "missing_anchors": missing}
 
 
+@memo_read
 def group_fingerprint(p, project_path, g):
     from requirements import contexts
     resolved = contexts(p)
@@ -253,6 +247,8 @@ def import_video(p, project_path, gid, video):
     return record
 
 
+@verified_read
+@memo_read
 def video_context(p, project_path, gid):
     """One immutable group context, plus only the adjacent boundary shots."""
     from storyboard import current_mapping, current_frame
@@ -296,13 +292,19 @@ def video_context(p, project_path, gid):
               "duration": task.get("duration"), "assets": assets, "shots": rows, "mapping": mapping,
               "extraction": extraction, "boundaries": boundaries}
     if p.get("config", {}).get("video_source") == "imported":
-        result["review_schema"] = 3
-        result["reference_policy_version"] = 2  # Per-shot structural asset evidence gates.
+        result["review_schema"] = 5
+        result["reference_policy_version"] = 5  # Story readability, not unique reconstruction.
         for row, shot in zip(rows, shots(p, g)):
             row["asset_ids"] = list(shot["asset_ids"])
         result["narrative_plan"] = copy.deepcopy(p.get("narrative_plan"))
         result["review_scope"] = {"dialogue_text": False, "dialogue_lip_sync": False,
-            "duration_accuracy": False, "visual_actions": True, "subtitles": True,
+            "duration_accuracy": False, "visual_actions": True, "subtitles": False,
+            "screen_text": False, "group_checks": ["shot", "continuity", "story"],
+            "reference_omission_basis": "story_readable_without_ambiguity",
+            "unique_visual_reconstruction_required": False,
+            "performance_detail_alone_protected": False,
+            "visual_match_basis": "narrative_equivalence",
+            "noncritical_visual_variations_allowed": True, "explicit_strict_requirements": True,
             "group_duration_basis": "script_plan", "max_group_seconds": 15,
             "max_group_shots": 12, "short_group_seconds": 8}
     result["context_fingerprint"] = digest(result)
@@ -310,6 +312,7 @@ def video_context(p, project_path, gid):
     return result
 
 
+@verified_read
 def review_current(p, project_path, gid):
     if gid == "__delivery__":
         d = p.get("delivery") or {}
@@ -325,7 +328,7 @@ def review_current(p, project_path, gid):
     for r in reversed(p.get("reviews", [])):
         if r["group_id"] == gid and r["version"] == version and r["video_sha256"] == sha(path) and r.get("fingerprint") == fp and not r.get("stale"):
             if p.get("config", {}).get("video_source") == "imported" and (
-                    r.get("review_schema") != 3 or r.get("reference_policy_version") != 2 or not r.get("context_fingerprint")):
+                    r.get("review_schema") != 5 or r.get("reference_policy_version") != 5 or not r.get("context_fingerprint")):
                 return None
             if r.get("context_fingerprint") and (gid == "__delivery__" or r["context_fingerprint"] != video_context(p, project_path, gid)["context_fingerprint"]):
                 return None
@@ -454,7 +457,10 @@ def record_review(p, project_path, r):
         require(r.get("context_fingerprint") == ctx["context_fingerprint"], "review context changed; reload group evidence")
         require(ctx["mapping"] and ctx["extraction"], "review needs current extraction and mapping")
     checks = r.get("checks", {})
-    require(set(checks) == {"shot", "continuity", "story", "subtitles"}, "all four review checks required")
+    required_checks = {"shot", "continuity", "story"}
+    if not imported:
+        required_checks.add("subtitles")  # Preserve the separately authorized generation workflow.
+    require(set(checks) == required_checks, "review checks must match scope: " + ", ".join(sorted(required_checks)))
     require(all(v in ("PASS", "FAIL", "uncertain") for v in checks.values()), "invalid verdict")
     coverage = r.get("coverage", {})
     require(coverage.get("shot_ids") == ids, "review must account for every shot in order")
@@ -489,10 +495,10 @@ def record_review(p, project_path, r):
                 require(times and all(any(e["shot_id"] == a["shot_id"] and e["time"] == t for e in evidence) for t in times), "reference assessment needs same-shot evidence")
         if imported:
             validate_imported_review(p, project_path, r, ctx)
-            require(r.get("review_schema", 3) == 3 and r.get("reference_policy_version", 2) == 2,
+            require(r.get("review_schema", 5) == 5 and r.get("reference_policy_version", 5) == 5,
                     "old review version cannot be upgraded without new evidence")
             r = copy.deepcopy(r)
-            r.update(review_schema=3, reference_policy_version=2)
+            r.update(review_schema=5, reference_policy_version=5)
         boundary_checks = r.get("boundary_checks", [])
         require([b.get("shot_id") for b in boundary_checks] == [b["shot_id"] for b in ctx["boundaries"]], "all adjacent boundary checks required")
         for b, source in zip(boundary_checks, ctx["boundaries"]):
@@ -526,6 +532,9 @@ def record_review(p, project_path, r):
             for span in spans:
                 require(any(e["shot_id"] == span["shot_id"] and span["start"] <= e["time"] < span["end"] for e in evidence),
                         "PASS needs evidence inside each actual shot span")
+    if ctx and p.get('config', {}).get('video_source') == 'imported' and 'repair_assessments' in r:
+        from repair_cycle import validate_assessments
+        validate_assessments(p, r)
     r = copy.deepcopy(r)
     r.update(fingerprint=fp, verdict="FAIL" if failed else ("PASS" if passing else "uncertain"), id=uuid.uuid4().hex)
     p.setdefault("reviews", []).append(r)
@@ -595,6 +604,7 @@ def main():
         if name == "split": q.add_argument("before")
         if name == "render": q.add_argument("output")
         if name == "review": q.add_argument("review_file")
+        if name == "context": q.add_argument("--incremental-from", help="Reuse eligible records from the pre-remap evidence report")
         if name == "repair":
             q.add_argument("groups", nargs="+")
             q.add_argument("--reason", required=True)
@@ -608,7 +618,12 @@ def main():
         result = validate(p, args.project)
         if args.cmd == "prompt": result = prompt(p, args.group)
         if args.cmd == "import-video": result = import_video(p, args.project, args.group, args.video)
-        if args.cmd == "context": result = video_context(p, args.project, args.group)
+        if args.cmd == "context":
+            if args.incremental_from:
+                from incremental import resume_context
+                result = resume_context(p, args.project, args.group, args.incremental_from)
+            else:
+                result = video_context(p, args.project, args.group)
         if args.cmd == "render": result = render(p, args.project, args.output)
         if args.cmd == "review": result = record_review(p, args.project, read(args.review_file))
         if args.cmd == "repair": repair(p, args.project, args.groups, args.reason)

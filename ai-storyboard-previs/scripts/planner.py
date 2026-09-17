@@ -6,6 +6,7 @@ from decimal import Decimal
 import itertools
 from pathlib import Path
 import sys
+from evidence_runtime import verified_read
 from previs import (read, save, locked, validate, require, number, digest, resolve,
                     group_fingerprint, current_video, video_context, review_current)
 
@@ -267,6 +268,7 @@ def plan(p, project_path, profile):
     return result
 
 
+@verified_read
 def aggregation_fingerprint(p, project_path, profile):
     from storyboard import current_frame
     rows = []
@@ -303,6 +305,7 @@ def missing_summary(groups, decisions, config):
     return result
 
 
+@verified_read
 def imported_post_review_plan(p, project_path, profile):
     from storyboard import current_frame, mapping_row
     from grouping import partition
@@ -383,7 +386,7 @@ def imported_post_review_plan(p, project_path, profile):
                     status = "missing_required"
                 note = ""
                 if status == "missing_required":
-                    note = "；必要锚点或分组约束要求保留此镜。" if a.get("derivable") is True else "；已确认缺失，无法由已有镜头可靠推导。"
+                    note = "；必要锚点或分组约束要求保留此镜。" if a.get("derivable") is True else "；已确认缺失，省去独立图会使故事断裂、有歧义或失去必要剧情节点。"
                 d.update(mode="pending", status=status, bracket=None, reason=state["reason"] + note)
     by_id = {d["shot_id"]: d for d in result["decisions"]}
     for d in result["decisions"]:
@@ -401,6 +404,7 @@ def imported_post_review_plan(p, project_path, profile):
     return result
 
 
+@verified_read
 def post_review_plan(p, project_path, profile):
     """Replan a copy: never replace actual task groups or promote suggestions to proof."""
     if p.get("config", {}).get("video_source") == "imported":

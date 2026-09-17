@@ -1,4 +1,4 @@
 interface:
   display_name: "视频实证分镜规划"
-  short_description: "校对用户视频、脚本与资产图，提出分镜聚合和省图建议，交付图片与 Markdown"
-  default_prompt: "使用 $ai-storyboard-previs 校对我提供的视频、脚本和资产图，完成抽帧匹配、连续性审查、相邻聚合与 ai_fill 建议，只交付保留图片和简洁 Markdown。"
+  short_description: "校对用户视频、脚本与资产图，聚合省图，授权后按阈值返修一次，交付两轮 Markdown"
+  default_prompt: "使用 $ai-storyboard-previs 校对我提供的视频、脚本和资产图，完成抽帧匹配、连续性审查、相邻聚合与 ai_fill 建议，先交付原视频图片和 Markdown；已授权且达到阈值时固定工作流返修一次，独立复审后再交付第二份 Markdown。"

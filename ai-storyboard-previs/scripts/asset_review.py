@@ -36,6 +36,10 @@ def validate_asset_evidence(p, project_path, review, context):
         require(rows[sid]["verdict"] != "absent", "absent shot cannot claim an asset comparison")
         decision = c.get("decision")
         require(decision in ("PASS", "FAIL", "uncertain"), "invalid asset decision")
+        if aspect in ("wardrobe", "appearance"):
+            require(text(c.get("story_requirement")), "character comparison needs a concrete story_requirement or explicit strict requirement")
+            if decision != "PASS":
+                require(text(c.get("story_impact")), "character FAIL/uncertain needs concrete story_impact")
         require(c.get("asset_sha256") == assets[aid]["sha256"], "asset comparison hash mismatch")
         refs = c.get("evidence_refs")
         require(isinstance(refs, list), "asset evidence_refs required")
@@ -65,24 +69,18 @@ def validate_asset_evidence(p, project_path, review, context):
         by_id[cid], by_key[sid, aid, aspect] = c, c
 
     for sid, row in rows.items():
+        require(text(row.get("identity_reason")), "per-shot identity_reason required")
         if row["verdict"] == "absent":
             continue
-        scope = row.get("identity_scope")
-        require(isinstance(scope, list), "per-shot identity_scope required")
-        required_keys = {(aid, aspect) for aid in shots[sid]["asset_ids"] if assets[aid]["kind"] == "character"
-                         for aspect in ("wardrobe", "appearance")}
-        require(all(isinstance(x, dict) for x in scope) and
-                len(scope) == len(required_keys) and {(x.get("asset_id"), x.get("aspect")) for x in scope} == required_keys,
-                "identity_scope must separately cover wardrobe and appearance for each character")
-        decisions = []
-        for item in scope:
-            require(type(item.get("required")) is bool and text(item.get("reason")), "identity scope needs applicability and reason")
-            c = by_key.get((sid, item["asset_id"], item["aspect"]))
-            require(bool(c) == item["required"], "required identity aspect needs its own comparison; excluded aspect must not claim a verdict")
-            if c:
-                decisions.append(c["decision"])
+        decisions = [c["decision"] for c in comparisons if c["shot_id"] == sid and
+                     ASPECT_CHECK[c["aspect"]] == "identity"]
         expected = "FAIL" if "FAIL" in decisions else "uncertain" if "uncertain" in decisions else "PASS"
         require(row["checks"]["identity"] == expected, "identity check contradicts per-aspect asset comparisons")
+        if expected == "PASS":
+            characters = [assets[aid] for aid in shots[sid]["asset_ids"] if assets[aid]["kind"] == "character"]
+            require(all(a["sha256"] != "MISSING" for a in characters), "identity PASS needs current asset")
+            require(not characters or any(e["shot_id"] == sid and e["time"] in row.get("evidence_times", []) for e in evidence),
+                    "identity PASS needs same-shot visible facts and timed evidence")
         # Other asset aspects cannot hide a conflict under a different check.
         for check in ("props", "scene"):
             ds = [c["decision"] for c in comparisons if c["shot_id"] == sid and ASPECT_CHECK[c["aspect"]] == check]

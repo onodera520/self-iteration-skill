@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from evidence_runtime import verified_read, memo_read, evidence_operation
 from previs import (read, save, locked, validate, require, number, resolve, sha, digest,
                     group, current_video, group_fingerprint)
 
@@ -109,8 +110,12 @@ def record_mapping(p, project, data):
         require(row.get("status") in ("matched", "absent", "uncertain"), "invalid mapping status")
         require(isinstance(row.get("observation"), str) and row["observation"].strip(), "mapping needs visible observations")
         candidates = row.get("candidates", [])
+        if "independent_visual_unit" in row:
+            require(type(row["independent_visual_unit"]) is bool, "independent_visual_unit must be boolean")
         if row["status"] == "matched":
             require(candidates, "matched shot needs candidate frames")
+            require(row.get("independent_visual_unit") is not False,
+                    "matched cannot reuse a previous visual unit when the required independent shot is missing; use uncertain then rescan")
         else:
             require(not candidates, "unmatched shot cannot claim matched candidates")
         if row["status"] == "absent":
@@ -138,13 +143,41 @@ def record_mapping(p, project, data):
     p.setdefault("board_mappings", []).append(item)
 
 
+def record_mapping_batch(p, project, data):
+    """Register one mapping and its selections atomically, without new judgments."""
+    staged = copy.deepcopy(p)
+    with evidence_operation():
+        mapping = {k: v for k, v in data.items() if k != "selections"}
+        record_mapping(staged, project, mapping)
+        selections = data.get("selections", [])
+        require(isinstance(selections, list), "selections must be a list")
+        ids = [item["shot_id"] for item in selections]
+        require(len(set(ids)) == len(ids) and set(ids) <= set(group(staged, data["group_id"])["shot_ids"]),
+                "selections must be unique shots from the mapped group")
+        for item in selections:
+            require(item.get("source", {}).get("kind") == "frame", "mapping selections must use extracted frames")
+            select_image(staged, project, item)
+    p.clear()
+    p.update(staged)
+
+
+@verified_read
 def current_mapping(p, project, gid):
+    index = _current_mapping_index(p, project, gid)
+    # Preserve the existing API's live project-record reference.
+    return p["board_mappings"][index] if index is not None else None
+
+
+@memo_read
+def _current_mapping_index(p, project, gid):
     g = group(p, gid)
     task, video = current_video(p, project, g)
     if not task:
         return None
     fp = group_fingerprint(p, project, g)
-    for m in reversed(p.get("board_mappings", [])):
+    mappings = p.get("board_mappings", [])
+    for index in reversed(range(len(mappings))):
+        m = mappings[index]
         if m["group_id"] == g["id"] and m["group_fingerprint"] == fp and m["video_sha256"] == sha(video):
             evidence_path = resolve(project, m["evidence_file"])
             if not evidence_path.is_file() or (m.get("evidence_sha256") and sha(evidence_path) != m["evidence_sha256"]):
@@ -152,7 +185,7 @@ def current_mapping(p, project, gid):
             evidence = read(evidence_path)
             if any(not resolve(project, f["path"]).is_file() or sha(resolve(project, f["path"])) != f["sha256"] for f in evidence["frames"]):
                 return None
-            return m
+            return index
     return None
 
 
@@ -278,6 +311,7 @@ def repair(p, project, data):
                                        "groups": sorted(groups), "recheck": sorted({n for o in operations for n in [o["shot_id"]] + neighbors(p, o["shot_id"])})})
 
 
+@verified_read
 def render(p, project, out):
     validate(p, project)
     if p.get("config", {}).get("workflow") == "video_evidence" or "aggregation" in p:
@@ -365,6 +399,7 @@ def seconds(value, suggested=False):
     return format(Decimal(str(value)).normalize(), 'f') + " 秒" + ("（建议）" if suggested else "")
 
 
+@verified_read
 def render_aggregation(p, project, out):
     from planner import current_aggregation
     proposal = current_aggregation(p, project)
@@ -398,7 +433,8 @@ def render_aggregation(p, project, out):
     out = Path(out).resolve()
     names = {sid: "images/" + sid + "-" + item["sha256"][:12] + Path(item["path"]).suffix.lower()
              for sid, (item, _) in chosen.items()}
-    thumbnails = {s["id"]: "images/thumb-" + s["id"] + "-" + digest([decisions.get(s["id"]), chosen.get(s["id"])])[:12] + ".png" for s in p["shots"]}
+    thumbnails = {s["id"]: "images/thumb-" + s["id"] + "-" + digest([decisions.get(s["id"]), chosen.get(s["id"])])[:12] + ".png"
+                  for s in p["shots"] if decisions.get(s["id"], {}).get("mode") != "ai_fill"}
     expected = {"分镜说明.md", *names.values(), *thumbnails.values()}
     require(not out.exists() or all(f.relative_to(out).as_posix() in expected for f in out.rglob("*") if f.is_file()),
             "choose a new delivery folder to preserve previous files and exclude internal records")
@@ -409,7 +445,7 @@ def render_aggregation(p, project, out):
             text = text.replace(char, "\\" + char)
         return " ".join(text.splitlines())
     lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜。", "",
-             "ai_fill 仅省独立参考图，脚本镜头仍保留；可推导不等于视频已生成该镜，省图效果未经生成验证。", ""]
+             "“可推导生成”仅表示建议省去独立参考图，脚本镜头仍保留；不表示已生成或已验证。", ""]
     if p.get("config", {}).get("video_source") == "imported":
         lines += ["时长采用脚本计划值，每组不超过15秒；建议值单独标注。对白不作逐字或口型同步检查。", ""]
     if not proposal:
@@ -446,10 +482,10 @@ def render_aggregation(p, project, out):
                 reason += "；" + "；".join(f"{i['time_range']} 秒：{i['problem']}；建议：{i['fix']}" for i in issues)
             treatment, basis, label = "暂不省图", "—", "待检查"
             if decision.get("mode") == "ai_fill":
-                treatment, label = "可推导省图", "可推导省图"
+                treatment, label = "建议省图，未验证", "可推导生成"
                 bracket = decision["bracket"]
                 basis = f"{bracket['before']} + {bracket['after']}"
-                reason += "；ai_fill · 建议省图，未验证"
+                reason += "；建议省图，未验证"
             elif code == "anchor_reviewed":
                 treatment = "保留图"
             elif code == "missing_required":
@@ -463,11 +499,14 @@ def render_aggregation(p, project, out):
                 dest.parent.mkdir(exist_ok=True)
                 if source != dest:
                     shutil.copy2(source, dest)
-            thumb = out / thumbnails[sid]
-            thumbnail(source, thumb, sid, label, "历史抽帧 · 待检查" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
-            picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
-            if source:
-                picture = f"[{picture}](<{names[sid]}>)"
+            if decision.get("mode") == "ai_fill":
+                picture = "可推导生成"
+            else:
+                thumb = out / thumbnails[sid]
+                thumbnail(source, thumb, sid, label, "历史抽帧 · 待检查" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
+                picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
+                if source:
+                    picture = f"[{picture}](<{names[sid]}>)"
             timing = seconds(s.get('duration'), s.get('duration_source', {}).get('kind') == 'inference')
             if s.get('duration') is not None and not s.get('duration_source') and p.get('config', {}).get('video_source') == 'imported':
                 timing += '（来源待确认）'
@@ -503,7 +542,7 @@ def main():
             print(json.dumps({"fingerprint": review_fingerprint(p, args.project, args.input), "image_sha256": item["sha256"] if item else None,
                               "requirements": contexts(p).get(args.input)}, ensure_ascii=False))
         else:
-            fn = {"map": record_mapping, "select": select_image, "restore": restore_image, "omit": omit_image,
+            fn = {"map": record_mapping_batch, "select": select_image, "restore": restore_image, "omit": omit_image,
                   "review": record_review, "repair": repair}[args.command]
             fn(p, args.project, read(args.input))
             save(args.project, p)

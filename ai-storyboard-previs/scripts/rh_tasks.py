@@ -160,6 +160,8 @@ def run(p, project_path, request, module, registry, client, wait_seconds=300, in
     reserved = [t for t in tasks.values() if t.get("reserved")]
     require(len(reserved) < c.get("max_submissions", 0), "submission limit reached; no task submitted")
     if "budget_cny" in c:
+        require(all(number(t.get("estimated_cost_cny")) for t in reserved),
+                "existing reserved task has no CNY estimate; do not convert RH coins or ignore its cost")
         cost = sum(t["estimated_cost_cny"] for t in reserved) + request["estimated_cost_cny"]
         require(cost <= c["budget_cny"], "estimated budget reached; no task submitted")
     payload = prepared["payload"]

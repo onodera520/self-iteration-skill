@@ -28,7 +28,7 @@ class AssetEvidenceTests(fixtures.Base):
         c['stable_matches']=['notched lapel', 'white crew-neck inner layer'] if e else []
         if verdict=='FAIL':
             r['shot_reviews'][1]['checks'].update(identity='FAIL',props='PASS')
-            c.update(decision='FAIL',stable_matches=[],stable_conflicts=[dict(feature='garment fasteners and collar',
+            c.update(decision='FAIL',story_requirement='Script requires suit as disguise recognition clue',story_impact='Changed jacket breaks the disguise recognition',stable_matches=[],stable_conflicts=[dict(feature='garment fasteners and collar',
                 expected='notched lapel and white crew-neck layer', observed='asymmetric biker zipper, stand collar, closed dark inner layer',
                 environment_exclusion='Rain can change gloss but cannot replace lapels with a zipper and stand collar')])
             e.update(visible_facts=['asymmetric zipper visible', 'stand collar', 'closed dark inner layer'],
@@ -41,13 +41,52 @@ class AssetEvidenceTests(fixtures.Base):
         self.assertEqual(core.record_review(self.p,self.path,r),'PASS')
         self.assertEqual(planner.post_review_plan(self.p,self.path,{})['decisions'][1]['status'],'anchor_reviewed')
 
-    def test_biker_structure_fails_only_this_shot(self):
+    def test_ordinary_appearance_deviations_and_distant_face_pass_without_comparisons(self):
+        for facts in (['face differs, same actor role and action relationship recognizable'],
+                      ['biker jacket replaces suit; no disguise or wardrobe plot cue'],
+                      ['distant two people walking together; face and collar too small to see']):
+            with self.subTest(facts=facts):
+                r,c=self.sample()
+                r['asset_comparisons']=[]
+                for row in r['shot_reviews']:
+                    row.pop('identity_scope',None)
+                    row['identity_reason']='Actor and action relationship recognizable; appearance differences have no story impact'
+                r['evidence'][1].update(visible_facts=facts,interpretation='Required story relationship remains clear')
+                self.assertEqual(core.record_review(self.p,self.path,r),'PASS')
+
+    def test_character_failure_or_uncertainty_requires_story_requirement_and_impact(self):
+        for verdict in ('FAIL','uncertain'):
+            r,c=self.sample('FAIL') if verdict=='FAIL' else (None,None)
+            if verdict=='uncertain':
+                self.mapping({'S02':'uncertain'})
+                r=self.review_data()
+                c=next(x for x in r['asset_comparisons'] if x['shot_id']=='S02')
+            for field in ('story_requirement','story_impact'):
+                bad=copy.deepcopy(r)
+                next(x for x in bad['asset_comparisons'] if x['id']==c['id']).pop(field)
+                with self.subTest(verdict=verdict,field=field),self.assertRaisesRegex(ValueError,field):
+                    core.record_review(self.p,self.path,bad)
+
+    def test_wrong_action_actor_fails_with_local_story_evidence(self):
+        r,c=self.sample('FAIL')
+        c.update(story_requirement='Girl must keep the key until the handoff',story_impact='Boy acts as key holder before handoff',
+                 stable_conflicts=[dict(feature='acting character',expected='girl holding key',observed='boy holding key',
+                                        environment_exclusion='Lighting cannot change who performs the action')])
+        self.assertEqual(core.record_review(self.p,self.path,r),'FAIL')
+
+    def test_identity_reason_and_fail_comparison_cannot_be_omitted(self):
+        r,c=self.sample();r['shot_reviews'][1].pop('identity_reason')
+        with self.assertRaisesRegex(ValueError,'identity_reason'):core.record_review(self.p,self.path,r)
+        r,c=self.sample('FAIL');r['asset_comparisons']=[]
+        with self.assertRaisesRegex(ValueError,'identity check contradicts'):core.record_review(self.p,self.path,r)
+
+    def test_biker_breaking_required_disguise_fails_only_this_shot(self):
         r,c=self.sample('FAIL')
         self.assertEqual(core.record_review(self.p,self.path,r),'FAIL')
         self.assertEqual([x['status'] for x in planner.post_review_plan(self.p,self.path,{})['decisions']],
                          ['anchor_reviewed','mismatch','anchor_reviewed'])
 
-    def test_dark_silhouette_needs_evidence_not_regeneration_or_fill(self):
+    def test_dark_silhouette_with_required_identity_clue_needs_evidence(self):
         self.mapping({'S02':'uncertain'})
         r=self.review_data()
         for c in r['asset_comparisons']:
@@ -95,7 +134,7 @@ class AssetEvidenceTests(fixtures.Base):
     def test_wardrobe_does_not_pass_unseen_required_face(self):
         r,c=self.sample()
         face=next(x for x in r['asset_comparisons'] if x['shot_id']=='S02' and x['aspect']=='appearance')
-        face.update(decision='uncertain',stable_matches=[],unobservable_features=['required facial outline'],followup='Find clear same-shot face')
+        face.update(decision='uncertain',story_impact='Script requires recognizing the disguise wearer',stable_matches=[],unobservable_features=['required facial outline'],followup='Find clear same-shot face')
         with self.assertRaisesRegex(ValueError,'identity check contradicts'):core.record_review(self.p,self.path,r)
 
     def test_hand_closeup_can_exclude_irrelevant_face(self):
@@ -136,13 +175,13 @@ class AssetEvidenceTests(fixtures.Base):
     def test_versions_invalidate_review_and_dependent_plan_but_not_frames(self):
         r,c=self.sample();self.finish(r)
         current=core.review_current(self.p,self.path,'G01')
-        self.assertEqual((current['review_schema'],current['reference_policy_version']),(3,2))
-        for field,old in [('review_schema',2),('reference_policy_version',1)]:
+        self.assertEqual((current['review_schema'],current['reference_policy_version']),(5,5))
+        for field,old in [('review_schema',3),('reference_policy_version',3)]:
             current[field]=old
             self.assertIsNone(core.review_current(self.p,self.path,'G01'))
             self.assertIsNone(planner.current_aggregation(self.p,self.path))
             self.assertIsNotNone(boards.current_mapping(self.p,self.path,'G01'))
-            current[field]=3 if field=='review_schema' else 2
+            current[field]=4
 
     def test_replacement_asset_invalidates_review_and_plan(self):
         r,c=self.sample();self.finish(r)
