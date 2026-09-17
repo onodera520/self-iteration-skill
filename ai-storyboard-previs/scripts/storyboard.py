@@ -398,7 +398,8 @@ def render_aggregation(p, project, out):
     out = Path(out).resolve()
     names = {sid: "images/" + sid + "-" + item["sha256"][:12] + Path(item["path"]).suffix.lower()
              for sid, (item, _) in chosen.items()}
-    thumbnails = {s["id"]: "images/thumb-" + s["id"] + "-" + digest([decisions.get(s["id"]), chosen.get(s["id"])])[:12] + ".png" for s in p["shots"]}
+    thumbnails = {s["id"]: "images/thumb-" + s["id"] + "-" + digest([decisions.get(s["id"]), chosen.get(s["id"])])[:12] + ".png"
+                  for s in p["shots"] if decisions.get(s["id"], {}).get("mode") != "ai_fill"}
     expected = {"分镜说明.md", *names.values(), *thumbnails.values()}
     require(not out.exists() or all(f.relative_to(out).as_posix() in expected for f in out.rglob("*") if f.is_file()),
             "choose a new delivery folder to preserve previous files and exclude internal records")
@@ -409,7 +410,7 @@ def render_aggregation(p, project, out):
             text = text.replace(char, "\\" + char)
         return " ".join(text.splitlines())
     lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜。", "",
-             "ai_fill 仅省独立参考图，脚本镜头仍保留；可推导不等于视频已生成该镜，省图效果未经生成验证。", ""]
+             "“可推导生成”仅表示建议省去独立参考图，脚本镜头仍保留；不表示已生成或已验证。", ""]
     if p.get("config", {}).get("video_source") == "imported":
         lines += ["时长采用脚本计划值，每组不超过15秒；建议值单独标注。对白不作逐字或口型同步检查。", ""]
     if not proposal:
@@ -446,10 +447,10 @@ def render_aggregation(p, project, out):
                 reason += "；" + "；".join(f"{i['time_range']} 秒：{i['problem']}；建议：{i['fix']}" for i in issues)
             treatment, basis, label = "暂不省图", "—", "待检查"
             if decision.get("mode") == "ai_fill":
-                treatment, label = "可推导省图", "可推导省图"
+                treatment, label = "建议省图，未验证", "可推导生成"
                 bracket = decision["bracket"]
                 basis = f"{bracket['before']} + {bracket['after']}"
-                reason += "；ai_fill · 建议省图，未验证"
+                reason += "；建议省图，未验证"
             elif code == "anchor_reviewed":
                 treatment = "保留图"
             elif code == "missing_required":
@@ -463,11 +464,14 @@ def render_aggregation(p, project, out):
                 dest.parent.mkdir(exist_ok=True)
                 if source != dest:
                     shutil.copy2(source, dest)
-            thumb = out / thumbnails[sid]
-            thumbnail(source, thumb, sid, label, "历史抽帧 · 待检查" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
-            picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
-            if source:
-                picture = f"[{picture}](<{names[sid]}>)"
+            if decision.get("mode") == "ai_fill":
+                picture = "可推导生成"
+            else:
+                thumb = out / thumbnails[sid]
+                thumbnail(source, thumb, sid, label, "历史抽帧 · 待检查" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
+                picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
+                if source:
+                    picture = f"[{picture}](<{names[sid]}>)"
             timing = seconds(s.get('duration'), s.get('duration_source', {}).get('kind') == 'inference')
             if s.get('duration') is not None and not s.get('duration_source') and p.get('config', {}).get('video_source') == 'imported':
                 timing += '（来源待确认）'

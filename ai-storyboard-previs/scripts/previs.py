@@ -296,8 +296,8 @@ def video_context(p, project_path, gid):
               "duration": task.get("duration"), "assets": assets, "shots": rows, "mapping": mapping,
               "extraction": extraction, "boundaries": boundaries}
     if p.get("config", {}).get("video_source") == "imported":
-        result["review_schema"] = 3
-        result["reference_policy_version"] = 2  # Per-shot structural asset evidence gates.
+        result["review_schema"] = 4
+        result["reference_policy_version"] = 3  # Story-relevant asset evidence gates.
         for row, shot in zip(rows, shots(p, g)):
             row["asset_ids"] = list(shot["asset_ids"])
         result["narrative_plan"] = copy.deepcopy(p.get("narrative_plan"))
@@ -325,7 +325,7 @@ def review_current(p, project_path, gid):
     for r in reversed(p.get("reviews", [])):
         if r["group_id"] == gid and r["version"] == version and r["video_sha256"] == sha(path) and r.get("fingerprint") == fp and not r.get("stale"):
             if p.get("config", {}).get("video_source") == "imported" and (
-                    r.get("review_schema") != 3 or r.get("reference_policy_version") != 2 or not r.get("context_fingerprint")):
+                    r.get("review_schema") != 4 or r.get("reference_policy_version") != 3 or not r.get("context_fingerprint")):
                 return None
             if r.get("context_fingerprint") and (gid == "__delivery__" or r["context_fingerprint"] != video_context(p, project_path, gid)["context_fingerprint"]):
                 return None
@@ -489,10 +489,10 @@ def record_review(p, project_path, r):
                 require(times and all(any(e["shot_id"] == a["shot_id"] and e["time"] == t for e in evidence) for t in times), "reference assessment needs same-shot evidence")
         if imported:
             validate_imported_review(p, project_path, r, ctx)
-            require(r.get("review_schema", 3) == 3 and r.get("reference_policy_version", 2) == 2,
+            require(r.get("review_schema", 4) == 4 and r.get("reference_policy_version", 3) == 3,
                     "old review version cannot be upgraded without new evidence")
             r = copy.deepcopy(r)
-            r.update(review_schema=3, reference_policy_version=2)
+            r.update(review_schema=4, reference_policy_version=3)
         boundary_checks = r.get("boundary_checks", [])
         require([b.get("shot_id") for b in boundary_checks] == [b["shot_id"] for b in ctx["boundaries"]], "all adjacent boundary checks required")
         for b, source in zip(boundary_checks, ctx["boundaries"]):

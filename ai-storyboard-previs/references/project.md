@@ -16,16 +16,16 @@
 - imported_videos：import-video 登记 target_id/version/source: user_video/outputs/output_hashes/group_fingerprint/duration。duration 为原视频实测范围，只用于抽帧及证据定位。独立于付费 tasks，替换视频后旧证据失效。
 - board_mappings：全组 matched/uncertain/absent，候选路径、实际时间、SHA256、observation。绑定视频、来源组及 evidence.json 哈希；完整补查确认 absent 时另填 full_rescan: true、rescan.ranges 和 rescan.observation，范围须覆盖整份实测视频。缺失镜头 candidates 为空，不能伪造对应帧。
 - shots[].board.selected：选帧 path/sha256/source.kind: frame/source.time/reason；history 保存历史选择。当前有效图必须属于当前 matched 候选。
-- reviews：四项组级 checks、按顺序的 shot_reviews、coverage.shot_ids/mapping_verified/limitations、带路径/哈希/时间的 evidence.observation、issues、uncertainties、boundary_checks、reference_assessments 和 context_fingerprint。imported review_schema 为 2；有 narrative_plan 时必须 grouping_checked: true，确认同时核对剧情分组与整个合并区间复杂度；不要求 actual_shots 或每镜时长区间。详见 [审查结构](review.md)。
+- reviews：四项组级 checks、按顺序的 shot_reviews、coverage.shot_ids/mapping_verified/limitations、带路径/哈希/时间的 evidence.observation、issues、uncertainties、boundary_checks、reference_assessments 和 context_fingerprint。imported review_schema 为 4；有 narrative_plan 时必须 grouping_checked: true，确认同时核对剧情分组与整个合并区间复杂度；不要求 actual_shots 或每镜时长区间。详见 [审查结构](review.md)。
 - shot_reviews：每镜 verdict: PASS|FAIL|uncertain|absent、reason、evidence_times；已定位镜须含七项 checks。一镜 FAIL 不妨碍其他镜独立 PASS；受影响的连续性边界仍须核对。漏镜不可 PASS。
 - reference_assessments：每镜 decision: anchor|ai_fill|pending、reason、evidence_times、derivable: true|false|null、basis_shot_ids。decision 是参考图取舍候选，独立于 mapping.status 与 shot_reviews.verdict；组合须遵守 [审查决策表](review.md#可推导省图判据与决策表)。ai_fill 须列顺序正确的两个已有前后依据镜，依据必须独立 PASS、保留图且有有效资产支持；状态不变不足以批准，reason 须解释状态承接与叙事信息。漏镜不填本镜帧证据，改引用完整补查和依据镜。没有可靠结论填 null，不计必要漏镜；已明确必须保留则填 false 并说明依据。最终规划仍检查候选的必要锚点约束。所有省图均为建议/未验证。context.reference_policy_version 纳入指纹，旧结论需按当前判据复核。
 - tasks/repairs/repair_round：旧生成与恢复记录仍保留。默认不用，不清空历史绕过安全限制。user_video_prompt 为旧生成模式字段，默认不需要。
 
 ## 资产审查证据版本
 
-已有视频组级审查使用 review_schema: 3、reference_policy_version: 2，两者纳入 context_fingerprint 并保存在审查记录。旧版本（包括没有版本/上下文的记录）不能支持当前审查或聚合；有效原始抽帧、匹配、SHA256 可复用，旧自由文字 observation 不自动升级。
+已有视频组级审查使用 review_schema: 4、reference_policy_version: 3，两者纳入 context_fingerprint 并保存在审查记录。旧版本（包括没有版本/上下文的记录）不能支持当前审查或聚合；有效原始抽帧、匹配、SHA256 可复用，旧自由文字 observation 不自动升级。
 
-evidence 增加非空 visible_facts 列表和 interpretation，保留 observation 摘要及 shot_id/path/sha256/time；视频绑定沿用当前 extraction/context。shot_reviews 的 identity_scope 对每个人物的 wardrobe/appearance 分别声明 required 和 reason；必要但不可见不能豁免。asset_comparisons 按镜记录 id/shot_id/asset_id/asset_sha256/aspect/evidence_refs/condition_factors/stable_matches/stable_conflicts/decision/unobservable_features/followup/basis_shot_ids。冲突含 feature/expected/observed/environment_exclusion；详见 [审查规则](review.md)。
+evidence 包含非空 visible_facts 和 interpretation，保留 observation 摘要及 shot_id/path/sha256/time，继续绑定当前视频。shot_reviews 每镜增加 identity_reason；普通通过不要求 identity_scope 或逐人外观比较。asset_comparisons 默认为 []，仅剧情相关外观要求/问题填写；详细字段见 [审查规则](review.md#资产外观判定剧情优先)。人物比较写 story_requirement，FAIL/uncertain 另写 story_impact。既有稳定冲突、逐镜资产/帧/时间绑定与问题引用门槛保留，但普通服装或脸部差异不单独判失败。
 
 问题必须显式填 asset_ids、asset_comparison_ids（非资产问题均为空），多镜资产问题逐镜绑定。工具检查结构和关联，不是视觉真实性检测器。不新增 confidence，不更改用户两表交付。缓存观察只在同哈希且内容有效时复用；解释被新证据推翻时重新校对受影响镜头与衔接。
 
@@ -43,14 +43,14 @@ evidence_fingerprint 绑定脚本（含 event、duration、duration_source、nar
 
 ## 固定交付
 
-render 在干净目录生成 `分镜说明.md` 和 `images/`。保留抽帧原图供点击查看；所有镜头均生成 240×168 PNG 小分镜图（下部绘制镜号）。省图或缺图生成同尺寸文字卡，注明“可推导省图”“必要漏镜”或“待检查”。MD 使用相对图片链接，可整体移动。仅本地缩放与绘字，不生成 AI 分镜图。
+render 在干净目录生成 `分镜说明.md` 和 `images/`。最终批准 ai_fill 的小分镜图栏仅纯文字“可推导生成”，不复制原帧、不生成缩略图或占位图片、不输出图片链接；内部证据保留。其余镜头保留原图供点击查看，生成 240×168 PNG 小分镜图（图下标镜号）；必要漏镜或待检查缺图继续使用文字卡。审查候选不是最终批准，不能据候选隐藏图片。MD 使用相对图片链接，可整体移动。仅本地缩放与绘字，不生成 AI 分镜图。
 
 MD 固定只包含两张表：
 
 1. **分组表**：分组编号、镜头顺序、总时长、简短分组理由。只聚合相邻镜头，每组 ≤15 秒、≤12 镜；包含建议时长的组注明“含建议值”。
 2. **逐镜表**：分组、原镜号、镜头时长、脚本描述、小分镜图、检验结果、图片处理、推导依据镜号、问题或修改建议。
 
-逐镜时长为脚本计划值，建议值注明“建议”；不拿原视频实际时长作内容失败依据。检验通过与图片处理分列。轻微错误写“该镜需重新生成”；完全不符先“待检查”并补查。漏镜可推导须同时显示“视频漏镜”和“可推导省图，未验证”，列依据镜号及具体承接理由；必要漏镜写“必要漏镜，需补生成”。旧证据不支持当前通过或错误结论。
+逐镜时长为脚本计划值，建议值注明“建议”；不拿原视频实际时长作内容失败依据。检验通过与图片处理分列。剧情、动作或明确要求的轻微错误写“该镜需重新生成”，不影响剧情的普通外观偏差不判失败；完全不符先“待检查”并补查。最终省图的小分镜图栏写“可推导生成”，图片处理栏写“建议省图，未验证”；检验结果按原结论分别写“检验通过”或“视频漏镜”，列依据镜号及具体承接理由；必要漏镜写“必要漏镜，需补生成”。旧证据不支持当前通过或错误结论。
 
 达到阈值时只在两张表下加一句“建议重新生成视频 ××，原因是必要漏镜达到阈值”。**不输出视频结论表，不展示内部 bad_num 或占比表**。未达到时，只在逐镜表列具体建议。
 

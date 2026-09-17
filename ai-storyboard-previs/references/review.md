@@ -47,7 +47,7 @@ selection 为 `{"shot_id":"S01","path":"候选路径","source":{"kind":"frame","
 
 ## 一次组级审查，逐镜独立结论
 
-previs.py context 一次输出全组 requirements、event（初分）、planned_duration/duration_source、narrative_plan、review_scope、scene_id/continuity_id、资产及哈希、视频/帧/映射、选帧、左右来源组边界、review_schema: 3、reference_policy_version: 2、context_fingerprint 和 previous_review。一次 LLM 完成全组校对、自然边界、相邻承接、整个合并区间复杂度核对、连续性与取舍依据，一次 previs.py review 保存。禁止逐镜 context/review；旧 storyboard.py 单镜 review 不代替此入口。事件划分以脚本行动目标及承接为准，不随视频错误改变；若发现事件标注有误，先修正完整事件字段并重新取得绑定上下文，再保存审查，不直接复制旧 PASS。有 narrative_plan 时，审查必须填写 grouping_checked: true；其含义是已核对批量剧情依据，不表示画面通过。普通路径仍是整理、匹配、审查三次判断。
+previs.py context 一次输出全组 requirements、event（初分）、planned_duration/duration_source、narrative_plan、review_scope、scene_id/continuity_id、资产及哈希、视频/帧/映射、选帧、左右来源组边界、review_schema: 4、reference_policy_version: 3、context_fingerprint 和 previous_review。一次 LLM 完成全组校对、自然边界、相邻承接、整个合并区间复杂度核对、连续性与取舍依据，一次 previs.py review 保存。禁止逐镜 context/review；旧 storyboard.py 单镜 review 不代替此入口。事件划分以脚本行动目标及承接为准，不随视频错误改变；若发现事件标注有误，先修正完整事件字段并重新取得绑定上下文，再保存审查，不直接复制旧 PASS。有 narrative_plan 时，审查必须填写 grouping_checked: true；其含义是已核对批量剧情依据，不表示画面通过。普通路径仍是整理、匹配、审查三次判断。
 
 优先用可用视频理解能力；否则看切点前后和镜头内部连续帧。复用已有哈希观察，只补充新证据。composition 仅使用“脚本明确 shot_size/关键帧要求 → 已有画面描述 → 满足/违反/证据不足”的规则；不加开放式视觉推理或审美评判。遮挡、画外和特写裁切不等于道具消失。
 
@@ -58,24 +58,19 @@ previs.py context 一次输出全组 requirements、event（初分）、planned_
 ```json
 {
   "group_id":"G01","version":1,"video_sha256":"FROM_CONTEXT","context_fingerprint":"FROM_CONTEXT",
-  "grouping_checked":true,"review_schema":3,"reference_policy_version":2,
+  "grouping_checked":true,"review_schema":4,"reference_policy_version":3,
   "checks":{"shot":"PASS","continuity":"PASS","story":"PASS","subtitles":"PASS"},
   "coverage":{"shot_ids":["S01"],"mapping_verified":true,"limitations":[]},
   "evidence":[{"shot_id":"S01","time":0.25,"path":"EXTRACTED_PATH","sha256":"FRAME_SHA256",
                "visible_facts":["可见西装驳领","可见白色圆领内搭","外套表面有湿水反光"],
                "interpretation":"服装结构吻合；反光与雨水相容","observation":"本镜服装结构可见"}],
   "shot_reviews":[{"shot_id":"S01","verdict":"PASS","reason":"脚本内容与衔接满足",
-    "identity_scope":[{"asset_id":"A01","aspect":"wardrobe","required":true,"reason":"本镜可见上身服装"},
-      {"asset_id":"A01","aspect":"appearance","required":false,"reason":"本例为服装局部特写，不要求画外人脸"}],
+    "identity_reason":"局部取景中持物者及行动关系可辨认，不需要证明画外人脸",
     "evidence_times":[0.25],"checks":{"identity":"PASS","scene":"PASS","props":"PASS",
     "composition":"PASS","key_state":"PASS","continuity":"PASS","cleanliness":"PASS"}}],
   "reference_assessments":[{"shot_id":"S01","decision":"anchor","derivable":false,"basis_shot_ids":[],
     "reason":"首次出场与持物基线，需要保留","evidence_times":[0.25]}],
-  "asset_comparisons":[{"id":"C01","shot_id":"S01","asset_id":"A01","asset_sha256":"FROM_CONTEXT",
-    "aspect":"wardrobe","evidence_refs":[{"path":"EXTRACTED_PATH","sha256":"FRAME_SHA256","time":0.25}],
-    "condition_factors":["rain","night lighting","wet reflections"],
-    "stable_matches":["西装驳领","白色圆领内搭"],"stable_conflicts":[],"decision":"PASS",
-    "unobservable_features":[],"followup":"","basis_shot_ids":[]}],
+  "asset_comparisons":[],
   "boundary_checks":[],"issues":[],"uncertainties":[]
 }
 ```
@@ -83,33 +78,33 @@ previs.py context 一次输出全组 requirements、event（初分）、planned_
 shot_reviews 的 verdict：
 
 - PASS：matched、有当前选帧且已包含在同镜 evidence 中、requirements ready、七项检查全 PASS，无本镜未解决问题；相关组边界也通过。即使同组其他镜头失败，本镜仍可独立通过。
-- FAIL：已定位且有选帧证据，七项检查至少一项 FAIL，issues 定位本镜。轻微不符也标“该镜需重新生成”，不计必要漏镜。
+- FAIL：已定位且有选帧证据，七项检查至少一项 FAIL，issues 定位本镜。剧情、动作或明确要求轻微不符也标“该镜需重新生成”；不影响剧情的普通外观偏差按下节放宽，不计必要漏镜。
 - uncertain：证据不够，七项 checks 必须齐全，至少一项 uncertain、没有已确认 FAIL；填写 followup、局限和需补查内容，不省图、不计数。有已确认错误时整镜仍为 FAIL，同时保留其他 uncertain 检查。
 - absent：必须对应完整补查后的 absent 映射，evidence_times 为空，不得在 evidence 里伪造该镜帧，issues 说明原视频缺失内容。组 story 必须 FAIL；漏镜绝不能 PASS。
 
 整组 PASS 仍要求全部 matched、要求 ready、四项通过、mapping_verified、每镜证据、无未决限制。不要求 actual_shots、各镜区间长度或覆盖时长验收。不可确认的动作/切镜保留 limitations/uncertainties，并使受影响镜头 uncertain；不能为通过而删记录。
 
-## 资产外观判定：逐镜结构证据
+## 资产外观判定：剧情优先
 
-先记雨水、夜景、彩色光、曝光、遮挡、运动模糊等干扰，再比服装类别、驳领/拉链、领型、内搭、扣件、长度与轮廓，最后参考颜色、明暗、光泽和纹理。变暗、湿水反光、饱和度变化或“像皮衣”不能单独支持 FAIL。visible_facts 只记可见中性结构；interpretation 单独解释，不在缺乏结构证据时写“皮衣”“换装”“角色不一致”。不增加 confidence 分数。
+资产用于正确理解人物、行动和剧情，不默认逐镜复刻完整五官或服装。允许不影响剧情的脸部、服装颜色、材质与款式偏差；服装类别变化也不单独判失败。用户明确要求严格一致的特征仍须满足。道具、动作结果、场景关系、连续性与字幕继续独立检查。
 
-每个非 absent 镜头的 identity_scope 对其 asset_ids 中每个人物分别列 wardrobe（服装）与 appearance（人物外观），填写 required 和 reason。required 表示本镜需要审查该方面，不能因为看不清就设为 false；required:false 仅用于脚本不要求且本镜不适用的方面，例如手部特写的画外人脸。被排除方面不生成 PASS 比较记录；identity 全部不适用时的 PASS 仅表示没有适用的身份检查，不声称验证完整人物身份。服装 PASS 不替代必要的人物外观判断。
+每镜填写简短 identity_reason，说明本镜人物及剧情关系是否成立；absent 说明无对应画面、不能判断身份。普通 PASS 复用本镜 visible_facts、interpretation、有效帧及资产，不强制 identity_scope 或逐人 wardrobe＋appearance。visible_facts 记中性可见事实，interpretation 解释其剧情意义；observation 仅兼容摘要。先考虑雨水、光照、曝光、遮挡与模糊，不把“看起来像皮衣”直接当剧情错误。
 
-asset_comparisons 每个“镜头＋资产＋方面”一条，示例字段均必填。aspect 为 wardrobe/appearance（对应 identity）、prop（对应 props）或 scene（对应 scene）。asset_sha256 取当前 context，evidence_refs 必须引用本镜 evidence 中的 path/sha256/精确 time，同时列在该镜 evidence_times 中。帧经当前抽帧集合绑定到当前视频；来源资产、视频、脚本与观察通过 context_fingerprint 一同绑定。
-
-| decision | 必须满足 |
+| identity | 判断与记录 |
 | --- | --- |
-| PASS | 当前资产、本镜有效帧及时间，非空 stable_matches，没有 stable_conflicts 或必要不可见特征 |
-| FAIL | 当前资产、本镜有效帧及时间，非空 stable_conflicts，并有对应 issue |
-| uncertain | unobservable_features 明确必要的不可见结构，followup 写出需要补查的角度/帧；不能同时声称已有确定冲突 |
+| PASS | 人物及行动关系可辨认，偏差不影响剧情；普通远景无需证明脸、纽扣和领型 |
+| FAIL | 本镜可见差异导致认错角色、行动主体错误，或破坏关键身份、伪装、换装等线索；明确严格要求被违反也需说明 |
+| uncertain | 剧情必需的信息看不清，说明所需补查；普通外观细节不清不单独触发 |
 
-stable_conflicts 每项为 `{"feature":"领型与扣件","expected":"资产西装驳领及纽扣","observed":"清晰立领和非对称拉链","environment_exclusion":"光照和湿水不能将驳领纽扣变成立领拉链"}`。颜色、反光不能冒充结构冲突。缺少资产或本镜有效证据时，不允许资产 PASS/FAIL；未知先补证。identity 检查按适用比较归并：任一 FAIL 则 FAIL，否则有 uncertain 则 uncertain，否则 PASS。其他七项检查与问题独立保留。
+asset_comparisons 默认为空列表，仅剧情相关外观要求或问题才补详细比较；prop/scene 比较沿用原门槛。每条含 id/shot_id/asset_id/asset_sha256/aspect/evidence_refs/condition_factors/stable_matches/stable_conflicts/decision/unobservable_features/followup/basis_shot_ids。aspect 为 wardrobe/appearance（identity）、prop（props）或 scene（scene）。人物比较增加 story_requirement（具体剧情要求或用户明确严格要求），FAIL/uncertain 另填 story_impact（差异或不可见信息如何影响该要求），不能只写“衣服不一样”。
 
-资产差异问题不论写在 identity、props、continuity 或其他检查下，都必须填 asset_ids 与 asset_comparison_ids。多镜问题中的每个镜头、每个相关资产都要有各自的 FAIL 比较和 issue 时间范围内的证据；禁止将一镜推断扩散到全组，或用更换检查项逃避门槛。工具校验结构、哈希、绑定和结论组合，无法证明视觉描述真实或自动识别被故意错标的自然语言问题。
+详细 PASS 须有适用吻合项且无剧情相关冲突；FAIL 须有非空 stable_conflicts；uncertain 须有必要不可见特征与具体 followup，不能同时声称已确认冲突。冲突逐项填写 `{"feature":"识别伪装的服装线索","expected":"脚本指定的西装伪装","observed":"本镜清晰可见机车夹克","environment_exclusion":"雨水或光照不能解释领型和扣件差异"}`，同时说明该差异如何破坏剧情识别。没有该剧情要求时，机车夹克不单独造成 FAIL。
 
-清晰邻镜可以帮助解释雨水与照明，记入 basis_shot_ids；引用镜须有同资产同方面、独立可见的 PASS 比较，不能循环解释或借用 FAIL。邻镜不能代替本镜可见事实，必要结构仍不清楚时保留 uncertain。背面、远景不自动 uncertain：本镜所需轮廓、袖口等若清楚仍可判断。新证据推翻旧解释时，更新受影响镜头与相关衔接，保留无关问题。以清晰驳领、白色内搭纠正早先“黑亮所以是皮衣”的解释，不把邻镜结构写进本镜 visible_facts。
+asset_sha256 取当前 context；PASS/FAIL 须有当前资产和本镜有效证据。evidence_refs 引用本镜 evidence 的 path/sha256/精确 time，且时间列入 evidence_times，沿用当前视频、脚本和资产指纹。identity 与适用人物比较须一致：任一 FAIL 则 FAIL，否则有 uncertain 则 uncertain，否则 PASS；普通 PASS 可不填比较，但仍须有本镜事实、时间和当前资产。工具只检查结构和关联，不证明视觉描述真实。
 
-上述字段在原有全组匹配和审查内完成，不增加逐镜 LLM 往返。对同一 SHA256 的有效事实复用；新规则要求补全或发现矛盾时才重看。雨夜西装结构吻合→PASS、明确机车夹克结构冲突→FAIL、必要结构不可见→uncertain 是行为回归；合成记录仅验证门槛，真实视觉验收另记范围。
+资产问题无论写入哪个检查项，issues 均填 asset_ids 与 asset_comparison_ids，非资产问题填空列表。多镜问题逐镜、逐资产引用各自 FAIL 比较及 issue 时间范围内证据，不能借用另一镜的 FAIL。清晰邻镜可帮助解释光照与雨水，basis_shot_ids 引用同资产同方面的独立 PASS 比较，不循环引用；不能替代本镜事实。剧情必需的信息仍不清楚则 uncertain，普通外观细节不清可通过。新证据推翻旧解释时更新受影响镜头及衔接，其他问题独立保留。
+
+所有字段在原有组级批量判断中填写，不增加逐镜往返。有效事实按 SHA256 复用，只有矛盾或必要补证才重看。回归区分“外观偏差但剧情成立”“破坏身份/行动线索”“必要剧情信息不可见”；结构化测试不是自动视觉识别或真实视觉验收。
 
 ## 可推导省图：判据与决策表
 
@@ -139,7 +134,7 @@ derivable 为三值：true 表示上述依据与语义条件均满足，可提�
 
 所有可推导省图均为“建议，未验证”。原视频该镜 PASS 只证明原画面符合脚本，不证明省去独立参考图后仍能生成。风险/信心不是验证状态，本轮不新增 confidence/risk 或“已验证”字段，不启动专项生成。工具检查字段组合、依据资格、指纹和硬约束；可重建性的语义判断由上述批量审查承担，不能把工具校验通过当作生成实证。
 
-已有视频 context 的 reference_policy_version 纳入指纹。review_schema=3 与 reference_policy_version=2 均进入指纹；旧审查与依赖它的聚合失效，不能改版本号后直接复用。有效抽帧、映射和哈希可继续使用；旧自由文字 observation 不能自动转换成新版比较证据，须按新判据补充事实并完成组级复核。
+已有视频 context 的 reference_policy_version 纳入指纹。review_schema=4 与 reference_policy_version=3 均进入指纹；旧审查与依赖它的聚合失效，不能改版本号后直接复用。有效抽帧、映射和哈希可继续使用；旧自由文字 observation 不能自动转换成新版比较证据，有效事实继续复用，按剧情标准完成组级复核；不能仅改版本号恢复通过。
 
 boundary_checks 按 context.boundaries 原顺序填 `{"shot_id":"S00","verdict":"PASS","observation":"本组首镜与前组末镜持物衔接"}`。PASS 需邻镜 matched 证据和 ready 要求；FAIL/uncertain 反映到 continuity 和本组受影响边缘镜。其他镜头可以独立通过。
 
@@ -149,7 +144,7 @@ FAIL/absent 的 issues 必填 id、shot_ids、time_range、severity、problem、
 
 审查后规划只计“确认缺失且无法省去的必要镜头”为 bad_num，每份输入视频各计一次。默认至少 2 镜且占该视频应覆盖镜头数至少 20% 才给重新生成建议。2/10 触发；2/11 与 1/3 不触发。轻微错误、可推导漏镜及待检查不计数，不变更脚本覆盖范围规避阈值。
 
-输出仅两表，阈值触发时在两表下加一句建议，不生成视频结论表。可推导漏镜仍标“视频漏镜；可推导省图，未验证”。省图不代表原视频完整，也不删脚本位置。
+输出仅两表，阈值触发时在两表下加一句建议，不生成视频结论表。所有最终批准 ai_fill 的小分镜图栏只写“可推导生成”，不输出原图、占位图片或图片链接；图片处理栏写“建议省图，未验证”。可推导漏镜检验结果仍为“视频漏镜”，已有通过镜头仍为“检验通过”。候选被最终锚点约束拒绝时继续展示图片。省图不代表原视频完整，也不删脚本位置。
 
 重选单镜帧：重看该镜及左右衔接，复用其他有效观察，以完整组结构重登记新指纹。替换整份视频：整份重新抽帧、匹配和审查，左右来源组只补查接壤边界并复用内部观察。脚本/资产/视频/依据图片/映射变更均使相关旧结论失效。previous_review 只供复用观察，不直接复制过期 PASS。
 

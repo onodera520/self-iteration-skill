@@ -75,7 +75,7 @@ class ImportedReviewTests(fixtures.Base):
             checks = {c:'PASS' for c in boards.CHECKS}
             if verdict == 'FAIL':
                 checks['props'] = 'FAIL'
-            r['shot_reviews'].append(dict(shot_id=sid,verdict=verdict,checks=checks,evidence_times=times,reason='SIMULATED '+verdict))
+            r['shot_reviews'].append(dict(shot_id=sid,verdict=verdict,checks=checks,evidence_times=times,reason='SIMULATED '+verdict, identity_reason='SIMULATED character/action relationship judged against story'))
             scope = []
             if verdict != 'absent':
                 aids = next(s['asset_ids'] for s in self.p['shots'] if s['id']==sid)
@@ -85,7 +85,7 @@ class ImportedReviewTests(fixtures.Base):
                     for aspect in ('wardrobe','appearance'):
                         scope.append(dict(asset_id=asset['id'],aspect=aspect,required=True,reason='SIMULATED relevant structure'))
                         r['asset_comparisons'].append(dict(id=sid+'-'+asset['id']+'-'+aspect,shot_id=sid,asset_id=asset['id'],
-                            asset_sha256=asset['sha256'],aspect=aspect,evidence_refs=[copy.deepcopy(frame)] if times else [],
+                            asset_sha256=asset['sha256'],aspect=aspect,story_requirement='SIMULATED explicit identity clue', story_impact='SIMULATED required actor identity unclear' if not times else '',evidence_refs=[copy.deepcopy(frame)] if times else [],
                             condition_factors=['SIMULATED rain'],stable_matches=['SIMULATED stable structure'] if times else [],
                             stable_conflicts=[],decision='PASS' if times else 'uncertain',
                             unobservable_features=[] if times else ['SIMULATED necessary structure invisible'],
@@ -131,9 +131,13 @@ class ImportedReviewTests(fixtures.Base):
         self.assertIn('| 总时长 |',text)
         self.assertIn('| 镜头时长 |',text)
         self.assertNotIn('视频结论',text)
-        self.assertIn('| 检验通过 | 可推导省图 | S01 + S03 |',text)
-        self.assertEqual(len(list(out.rglob('*.png'))),5)
-        for sid in ('S01','S02','S03'):
+        self.assertIn('| 检验通过 | 建议省图，未验证 | S01 + S03 |',text)
+        self.assertEqual(len(list(out.rglob('*.png'))),4)
+        row=next(l for l in text.splitlines() if '| S02 |' in l)
+        self.assertIn('| 可推导生成 |',row)
+        self.assertNotIn('![',row)
+        self.assertFalse(list(out.glob('images/*S02*')))
+        for sid in ('S01','S03'):
             thumb = next(out.glob('images/thumb-'+sid+'-*.png'))
             self.assertIn(thumb.name,text)
             with Image.open(thumb) as im:
@@ -148,9 +152,26 @@ class ImportedReviewTests(fixtures.Base):
         self.assertEqual(result['missing_summary'][0]['bad_num'],0)
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
         row=next(l for l in text.splitlines() if '| S02 |' in l)
-        self.assertIn('| 视频漏镜 | 可推导省图 | S01 + S03 |',row)
+        self.assertIn('| 视频漏镜 | 建议省图，未验证 | S01 + S03 |',row)
         self.assertIn('未验证',row)
+        self.assertIn('| 可推导生成 |',row)
+        self.assertNotIn('![',row)
+        self.assertFalse(list((self.path.parent/'delivery/images').glob('*S02*')))
+        self.assertEqual(core.review_current(self.p,self.path,'G01')['checks']['story'],'FAIL')
         self.assertNotIn('建议重新生成视频',text)
+
+    def test_final_anchor_overrides_fill_candidate_and_keeps_picture(self):
+        self.p['shots'][1]['reference']['locked']=True
+        self.mapping()
+        result=self.finish()
+        self.assertEqual(self.p['reviews'][-1]['reference_assessments'][1]['decision'],'ai_fill')
+        self.assertEqual(result['decisions'][1]['mode'],'anchor')
+        out=self.path.parent/'delivery'
+        document=Path(boards.render(self.p,self.path,out)).read_text(encoding='utf8')
+        row=next(l for l in document.splitlines() if '| S02 |' in l)
+        self.assertIn('![',row)
+        self.assertNotIn('| 可推导生成 |',row)
+        self.assertTrue(list(out.glob('images/thumb-S02-*')))
 
     def test_slight_error_is_local_failure_not_missing(self):
         self.mapping()
