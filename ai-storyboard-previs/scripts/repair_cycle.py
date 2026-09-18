@@ -13,6 +13,8 @@ POLICY = 1
 WORKFLOW = "2099403222661287938"
 PREVIS_DIRECTIVE = '严格按照分镜脚本生成一段快速切镜的视频，每个分镜不需要很大的动作幅度。没有台词，没有音乐，不要出现字幕。每个分镜硬切转场。'
 DECISION_STATE = ('fingerprint', 'execution_status', 'task_key', 'automatic_allowance_used')
+DELIVERY_STAGES = ('original', 'repaired')
+DELIVERY_NAMES = {'original': '01_原视频审查.md', 'repaired': '02_返修视频审查.md'}
 
 
 def lineage_tasks(p, gid, video_sha256=None):
@@ -161,6 +163,8 @@ def asset_style(p, assets):
 def make_prompt(p, project, gid):
     d = current_decision(p, project, gid)
     core.require(d['triggered'], 'Repair threshold not reached')
+    from requirements import contexts
+    resolved = contexts(p)
     original = {s['shot_id']: s for s in baseline(p)['shots']}
     assessment = {s['shot_id']: s for s in d['assessments']}
     ss = core.shots(p, core.group(p, gid))
@@ -173,18 +177,50 @@ def make_prompt(p, project, gid):
     lines.extend(baseline(p)['format_requirements'])
     lines += ['镜号对应：' + '；'.join(f"镜头{i}={s['id']}" for i, s in enumerate(ss, 1)),
               '返修快速预演每镜固定1.0秒，此处生成时长安排不改写原始脚本文字。']
-    blocks = []
+    blocks, corrections = [], []
     for i, s in enumerate(ss, 1):
         block = dict(shot_id=s['id'], text=original[s['id']]['text'], design=original[s['id']]['design'], duration=1.0)
         if s['id'] in d['allowed_correction_shot_ids']:
             block['correction'] = assessment[s['id']]['correction']
+            corrections.append((i, s['id']))
+        # Script-derived keyframe requirements only; they add no new story content.
+        requirement = resolved.get(s['id']) or {}
+        core.require(not requirement or requirement['ready'],
+                     'Resolve provisional shot requirements before repair: ' + s['id'])
+        must = [x for x in (requirement.get('must_have') or []) if x]
+        must_not = [x for x in (requirement.get('must_not_have') or []) if x]
+        changes = [f"{c['entity']}.{c['attribute']} 由 {c['before']} 变为 {c['after']}"
+                   for c in s.get('state_changes', []) if c.get('authorized') and c.get('critical')]
+        if must:
+            block['must_have'] = must
+        if must_not:
+            block['must_not_have'] = must_not
+        if must or must_not:
+            frame = requirement['keyframe']
+            block['keyframe_target'] = dict(phase=frame['phase'], description=frame['description'])
+        if changes:
+            block['critical_changes'] = changes
         blocks.append(block)
-        lines += [f"镜头{i},【时长】1.0s。【镜头设计】{block['design']}。【镜头内容】{block['text']}"]
+        line = f"镜头{i},【时长】1.0s。【镜头设计】{block['design']}。【镜头内容】{block['text']}"
+        if 'keyframe_target' in block:
+            phase = {'entry': '起态', 'action': '动作中', 'exit': '终态'}[frame['phase']]
+            line += f"【目标静帧】{phase}：{frame['description']}。以下必须/不得出现仅约束该时刻，完整动作仍按原脚本先后呈现。"
+        if must:
+            line += '【本镜必须出现】' + '；'.join(must)
+        if must_not:
+            line += '【本镜不得出现】' + '；'.join(must_not)
+        if changes:
+            line += '【本镜关键变化】' + '；'.join(changes)
         if 'correction' in block:
-            lines[-1] += '【仅本镜返修补充】' + block['correction']
+            line += '【仅本镜返修补充】' + block['correction']
+        lines += [line]
     lines += ['\n【固定预演要求】', PREVIS_DIRECTIVE,
-              '小幅运动仍须清楚呈现原脚本的关键动作和结果。对白、OS、VO仅用于理解剧情，不输出声音或屏幕文字。',
-              '【原始资产风格】', '以下风格仅约束视觉表现，不改变原脚本人物关系、动作、场景与时空；资产展示背景不替代剧情背景。']
+              '小幅运动仍须清楚呈现原脚本的关键动作和结果。对白、OS、VO仅用于理解剧情，不输出声音或屏幕文字。']
+    if corrections:
+        lines += ['【必须独立成镜的镜头】',
+                  '以下为本次需修正或补齐的镜头，必须各自单独成一个硬切镜头，不得省略、不得与相邻镜合并：'
+                  + '、'.join(f"镜头{i}={sid}" for i, sid in corrections)]
+    lines += ['【原始资产风格】', '以下风格仅约束视觉表现，不改变原脚本人物关系、动作、场景与时空；资产展示背景不替代剧情背景。']
     lines.extend(f"图{i}（{row['asset_id']}）：{row['guidance']}" for i, row in enumerate(style['assets'], 1))
     seconds = len(ss)
     return dict(workflow_id=WORKFLOW, instance_type='plus', source_group_id=gid,
@@ -210,17 +246,18 @@ def prepare(p, project, gid, request=None):
 def snapshot(p, project, out, stage):
     """Immutable two-table delivery; never render a fake second review."""
     import storyboard
-    core.require(stage in ('original', 'repaired'), 'Unknown delivery stage')
+    core.require(stage in DELIVERY_STAGES, 'Unknown delivery stage')
     core.require(planner.current_aggregation(p, project), 'Current aggregation required before delivery')
     core.require(all(core.review_current(p, project, g['id']) for g in p['groups']), 'All source/boundary reviews must be current')
-    if stage == 'repaired':
+    if stage != 'original':
         tasks = [t for t in p.get('tasks', {}).values() if t.get('repair_source_group')]
-        core.require(tasks and all(t.get('installed') for t in tasks), 'Repaired video not installed; no second report')
+        core.require(tasks and all(t.get('installed') for t in tasks), 'Repaired video not installed; no delivery report')
         for t in tasks:
-            g = core.group(p, t['repair_source_group'])
+            gid = t['repair_source_group']
+            g = core.group(p, gid)
             current, _ = core.current_video(p, project, g)
             core.require(current and current['output_hashes'] == t['output_hashes'] and g['version'] == t['installed_version'],
-                         'Second review must describe the installed repair output')
+                         'Delivery must describe the latest installed repair output for ' + gid)
     out = Path(out).resolve()
     records = p.setdefault('repair_deliveries', {})
     if stage in records:
@@ -231,9 +268,9 @@ def snapshot(p, project, out, stage):
     path = Path(storyboard.render(p, project, out))
     text = path.read_text(encoding='utf-8').replace('重新生成仅为建议，本流程不调用 API；待检查先补证据。',
         '是否自动返修由独立阈值与执行条件决定；未达阈值不代表审查通过，待检查先补证据。')
-    if stage == 'repaired':
+    if stage != 'original':
         text += '\n一次自动返修额度已用完；本表按新视频独立审查，仍有错误或待检查时以上述逐镜结论为准。\n'
-    dest = out / ('01_原视频审查.md' if stage == 'original' else '02_返修视频审查.md')
+    dest = out / DELIVERY_NAMES[stage]
     dest.write_text(text, encoding='utf-8')
     path.unlink()
     records[stage] = dict(path=str(dest), files={str(f): core.sha(f) for f in out.rglob('*') if f.is_file()},
@@ -358,7 +395,7 @@ def install(p, project, key):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('command', choices=('baseline', 'decide', 'prompt', 'submit', 'resume', 'attach', 'install', 'original', 'repaired'))
+    ap.add_argument('command', choices=('baseline', 'decide', 'prompt', 'submit', 'resume', 'attach', 'install') + DELIVERY_STAGES)
     ap.add_argument('project', type=Path)
     ap.add_argument('target', nargs='?')
     ap.add_argument('--output', type=Path)
@@ -375,7 +412,7 @@ def main():
             result = decide(p, project, args.target)
         elif cmd == 'prompt':
             result = prepare(p, project, args.target)
-        elif cmd in ('original', 'repaired'):
+        elif cmd in DELIVERY_STAGES:
             core.require(args.output, '--output delivery directory required')
             result = snapshot(p, project, args.output, cmd)
         elif cmd == 'attach':

@@ -136,6 +136,50 @@ class RepairCycleTests(fixtures.Base):
             with self.subTest(field=mutate),self.assertRaises(ValueError):
                 repair.prepare(self.p,self.path,'G01',bad)
 
+    def test_prompt_carries_shot_constraints_without_advancing_transfer_state(self):
+        self.ready()
+        request=repair.prepare(self.p,self.path,'G01')
+        for shot,block in zip(self.p['shots'],request['blocks']):
+            with self.subTest(shot=shot['id']):
+                req=shot['requirements']
+                self.assertEqual(block['must_have'],req['must_have'])
+                self.assertEqual(block['must_not_have'],req['must_not_have'])
+                self.assertEqual(block['keyframe_target'],dict(phase=req['keyframe']['phase'],description=req['keyframe']['description']))
+                line=next(l for l in request['prompt'].splitlines() if '【镜头内容】'+shot['script'] in l)
+                for constraint in req['must_have']+req['must_not_have']:
+                    self.assertIn(constraint,line)
+        # S03 inherits the girl's key from S02, then ends with the boy holding it.
+        transfer=request['blocks'][2]
+        self.assertEqual(transfer['keyframe_target']['phase'],'exit')
+        self.assertEqual(transfer['critical_changes'],['key.holder 由 girl 变为 boy'])
+        self.assertIn('【目标静帧】终态：'+transfer['keyframe_target']['description'],request['prompt'])
+        self.assertIn(transfer['critical_changes'][0],request['prompt'])
+        self.assertNotIn('critical_changes',request['blocks'][1])
+        self.assertNotIn('correction',transfer)
+        tampered=copy.deepcopy(request)
+        tampered['blocks'][2]['keyframe_target']['phase']='entry'
+        with self.assertRaises(ValueError):repair.prepare(self.p,self.path,'G01',tampered)
+
+    def test_provisional_requirements_cannot_be_sent_as_generation_constraints(self):
+        self.p['shots'][1]['requirements']['status']='provisional'
+        self.p['shots'][2]['requirements']['inherits_from']='S01'
+        self.ready()
+        api=FakeWorkflow()
+        with self.assertRaisesRegex(ValueError,'provisional shot requirements'):
+            repair.prepare(self.p,self.path,'G01')
+        with self.assertRaises(ValueError):repair.submit(self.p,self.path,'G01',api,True)
+        self.assertEqual(api.submissions,0)
+
+    def test_changed_requirement_invalidates_repair_before_submission(self):
+        self.ready()
+        request=repair.prepare(self.p,self.path,'G01')
+        self.p['shots'][1]['requirements']['must_not_have'].append('SIMULATED changed target')
+        with self.assertRaises(ValueError):repair.prepare(self.p,self.path,'G01',request)
+        with self.assertRaises(ValueError):repair.decide(self.p,self.path,'G01')
+        api=FakeWorkflow()
+        with self.assertRaises(ValueError):repair.submit(self.p,self.path,'G01',api,True)
+        self.assertEqual(api.submissions,0)
+
     def test_fingerprint_invalidation_and_immutable_baseline(self):
         self.ready()
         original=copy.deepcopy(self.p)
@@ -257,6 +301,12 @@ class RepairCycleTests(fixtures.Base):
         self.assertEqual(before,{f:core.sha(Path(f)) for f in before})
         self.assertEqual(Path(original).name,'01_原视频审查.md')
         self.assertEqual(Path(second).name,'02_返修视频审查.md')
+        for stage in ('repaired2','repaired3'):
+            out=self.path.parent/stage
+            with self.subTest(stage=stage),self.assertRaises(ValueError):
+                repair.snapshot(self.p,self.path,out,stage)
+            self.assertFalse(out.exists())
+            self.assertNotIn(stage,self.p['repair_deliveries'])
         self.assertTrue(repair.decide(self.p,self.path,'G01')['automatic_allowance_used'])
         repair.submit(self.p,self.path,'G01',api,True)
         self.assertEqual(api.submissions,1)

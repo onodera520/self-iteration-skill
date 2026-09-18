@@ -58,9 +58,9 @@
 - shots[].board.selected：选帧 path/sha256/source.kind: frame/source.time/reason；history 保存历史选择。当前有效图必须属于当前 matched 候选。
 - reviews：三项组级 checks（shot/continuity/story，不含屏幕文字）、按顺序的 shot_reviews、coverage.shot_ids/mapping_verified/limitations、带路径/哈希/时间的 evidence.observation、issues、uncertainties、boundary_checks、reference_assessments 和 context_fingerprint。imported review_schema 为 5；有 narrative_plan 时必须 grouping_checked: true，确认同时核对剧情分组与整个合并区间复杂度；不要求 actual_shots 或每镜时长区间。详见 [审查结构](review.md)。
 - shot_reviews：每镜 verdict: PASS|FAIL|uncertain|absent、reason、evidence_times；已定位镜须含七项 checks。一镜 FAIL 不妨碍其他镜独立 PASS；受影响的连续性边界仍须核对。漏镜不可 PASS。
-- reference_assessments：每镜 decision: anchor|ai_fill|pending、reason、evidence_times、derivable: true|false|null、basis_shot_ids。decision 是参考图取舍候选，独立于 mapping.status 与 shot_reviews.verdict；组合须遵守 [审查决策表](review.md#可推导省图判据与决策表)。ai_fill 须列顺序正确的两个已有前后依据镜，依据必须独立 PASS、保留图且有有效资产支持；reason 须说明省去独立图后故事仍可读且无歧义，不要求唯一复原手势或微表情；关键剧情节点保护，纯表演细节不自动保护。漏镜不填本镜帧证据，改引用完整补查和依据镜。没有可靠结论填 null，不计必要漏镜；已明确必须保留则填 false 并说明依据。最终规划仍检查候选的必要锚点约束。所有省图均为建议/未验证。context.reference_policy_version 纳入指纹，旧结论需按当前判据复核。
+- reference_assessments：每镜 decision: anchor|ai_fill|pending、reason、evidence_times、derivable: true|false|null、basis_shot_ids。decision 是参考图取舍候选，独立于 mapping.status 与 shot_reviews.verdict；组合须遵守 [审查决策表](review.md#可推导省图判据与决策表)。ai_fill 须列按镜序前后夹住本镜的两个合格依据镜，优先选最近且足以支持剧情判断的 PASS＋anchor 锚点；最近是建议而非工具硬约束，选较远依据须说明原因。依据必须独立 PASS、保留图且有有效资产支持；reason 须说明省去独立图后故事仍可读且无歧义，不要求唯一复原手势或微表情；关键剧情节点保护，纯表演细节不自动保护。漏镜不填本镜帧证据，改引用完整补查和依据镜。没有可靠结论填 null，不计必要漏镜；已明确必须保留则填 false 并说明依据。连续缺失的镜头不能互为依据，应向外寻找合格双侧锚点；仍缺一侧且判断不足填 null，已知必须保留填 false。最终规划仍检查候选的必要锚点约束。所有省图均为建议/未验证。context.reference_policy_version 纳入指纹，旧结论需按当前判据复核。
 - tasks/repairs/repair_round：保留旧生成与新增固定工作流返修记录，不清空历史绕过安全限制。user_video_prompt 为旧生成模式字段，默认不需要。
-- repair_baseline / repair_decisions / repair_deliveries：冻结脚本原文、独立机读判定、两轮不可覆盖的交付快照。repair_assessments 在原有组级审查内记录，repair policy=1 与脚本/资产/视频/审查/聚合指纹绑定，详见 [自动返修](auto-repair.md)。video_format_requirements 可选，须为 source_script 中全局格式要求的逐字摘录。
+- repair_baseline / repair_decisions / repair_deliveries：冻结脚本原文、独立机读判定、原视频与一次返修各自不可覆盖的交付快照。repair_assessments 在原有组级审查内记录，repair policy=1 与脚本/资产/视频/审查/聚合指纹绑定，详见 [自动返修](auto-repair.md)。video_format_requirements 可选，须为 source_script 中全局格式要求的逐字摘录。
 
 - shots[].shot_design：一次整理从脚本摘取的镜头设计，与原文一并冻结；缺省只用已有景别或标未指定，不新增机位。repair_asset_style：按原资产顺序保存 asset_id、sha256、visible_style_facts、guidance 和 preserves_story，绑定返修判定；详见 [受控提示词](auto-repair.md#受控提示词)。返修每镜固定 1.0s、总长为来源镜数 ×1 秒，含漏镜和 ai_fill；不覆盖原脚本 duration 或改变两表计划时长。末尾固定预演段与资产风格均不可由临时请求覆盖。
 
@@ -99,4 +99,4 @@ MD 固定只包含两张表：
 
 尚无有效聚合时按来源组展示待检查。失效历史帧可展示但必须标“历史抽帧 · 待检查”，不能支持当前省图；确认漏镜不以历史帧充当当前镜头。交付目录有额外文件则换新目录，工具不删除旧成果。
 
-不交付视频、HTML、项目 JSON、规划日志或内部审查记录。默认使用 repair_cycle.py original/repaired 包装原有渲染，分别保存 01_原视频审查.md 与 02_返修视频审查.md；首份不可覆盖。仅在新视频已生成并独立审查、相关边界有效后输出第二份。返修未触发或无法执行只交付首份并说明状态；第二轮有错误仍如实标记。独立付费阈值不改变两张表或原有必要漏镜统计。
+不交付视频、HTML、项目 JSON、规划日志或内部审查记录。默认使用 repair_cycle.py original/repaired 包装原有渲染，分别保存 01_原视频审查.md 与 02_返修视频审查.md；首份不可覆盖。仅在新视频已生成并独立审查、相关边界有效后输出第二份。返修未触发或无法执行只交付首份并说明状态；返修后仍有错误则如实标记。独立付费阈值不改变两张表或原有必要漏镜统计。
