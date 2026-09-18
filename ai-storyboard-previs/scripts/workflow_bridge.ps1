@@ -22,10 +22,27 @@ foreach ($asset in $request.assets) {
         throw 'Asset changed before upload.'
     }
 }
+function Set-RequestedAspect($candidate) {
+    if ($candidate.'115'.class_type -ne 'ResolutionSelector') {
+        throw 'Resolution selector changed; inspect workflow before submitting.'
+    }
+    $aspectValues = @{
+        '16:9' = '16:9 (Widescreen)'
+        '9:16' = '9:16 (Portrait Widescreen)'
+    }
+    $requestedValue = $aspectValues[[string]$request.aspect_ratio]
+    if (-not $requestedValue) {
+        throw 'Unsupported requested aspect ratio.'
+    }
+    # Mutate only the per-task graph copy; the saved RunningHub workflow is untouched.
+    $candidate.'115'.inputs.aspect_ratio = $requestedValue
+}
 function Test-RepairGraph($candidate) {
     Assert-NodeMap $candidate
     $aspect = [string]$candidate.'115'.inputs.aspect_ratio
-    if (($aspect -split ' ')[0] -ne $request.aspect_ratio) { throw 'Requested aspect ratio differs from fixed workflow; do not alter or crop.' }
+    if (($aspect -split ' ')[0] -ne $request.aspect_ratio) {
+        throw 'Requested aspect ratio differs from fixed workflow; do not alter or crop.'
+    }
     if ($candidate.'115'.class_type -ne 'ResolutionSelector' -or
         $candidate.'136'.inputs.width[0] -ne '115' -or $candidate.'136'.inputs.height[0] -ne '115' -or
         $candidate.'136'.inputs.length[0] -ne '131' -or $candidate.'131'.class_type -ne 'ComfyMathExpression' -or
@@ -38,6 +55,7 @@ function Test-RepairGraph($candidate) {
     }
 }
 $source = Get-Content -LiteralPath $exportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+Set-RequestedAspect $source
 Test-RepairGraph $source
 if ($jobData.action -eq 'prepare') {
     $prepared = New-DynamicGraph $source $inputData.prompt @($inputData.paths | ForEach-Object { [IO.Path]::GetFileName($_) })
@@ -49,6 +67,7 @@ if ($jobData.action -ne 'submit' -or -not $env:RH_WORKFLOW_API_KEY) { throw 'Aut
 $key = Get-Key
 Assert-CoinKey $key
 $source = Get-ServerGraph $key
+Set-RequestedAspect $source
 Test-RepairGraph $source
 $filenames = @()
 foreach ($path in $inputData.paths) {

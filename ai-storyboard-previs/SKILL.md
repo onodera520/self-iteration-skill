@@ -36,13 +36,14 @@ description: 根据用户的视频、脚本和资产图，抽帧匹配、回看�
 ### 环境探测与复用
 
 - **先探测，找到可用工具就复用，不按任务重新下载。** 优先检查显式配置的 PYTHON、FFMPEG、FFPROBE；未配置或不可用时，按下面固定位置查找，再检查 PATH。Python 必须实际执行版本检查（≥3.10）和所需模块导入；FFmpeg、FFprobe 分别执行 `-version`，路径存在或 WindowsApps 的 python 别名不代表可用。
-- Windows 固定查找位置：Python 为 `%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe`，再查 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/python/python.exe`；媒体工具先查 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/ffmpeg/bin/ffmpeg.exe` 和 `ffprobe.exe`，再复用已有 `%USERPROFILE%/.cache/storyboard-test-deps/imageio_ffmpeg/binaries/` 下的 FFmpeg 可执行文件及本机 `D:/work skill/test-tools/ffprobe.exe`。这些旧位置不要求配套存在，分别确认两种工具可用即可；其他电脑跳过不存在的位置。Codex 提供运行环境定位工具时也可用其返回路径，不全盘搜索。
+- Windows 固定查找位置（按顺序逐个执行 `-version` 验证，跳过不存在的位置，但必须把「验证过哪些、结果如何」记入 `runtime-paths.json`；未逐项验证不得判为「本地不可用」）：Python 为 `%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe`，再查 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/python/python.exe`；媒体工具先查 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/ffmpeg/bin/ffmpeg.exe` 和 `ffprobe.exe`，再复用 `%USERPROFILE%/.cache/storyboard-test-deps/imageio_ffmpeg/binaries/` 下的 FFmpeg 可执行文件及本机 `D:/work skill/test-tools/ffprobe.exe`，最后按通配查 `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*-full_build\bin\ffmpeg.exe`（同目录取 `ffprobe.exe`）以及 `%ProgramData%\chocolatey\bin\ffmpeg.exe`、`%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffmpeg.exe`。这些旧位置不要求配套存在，分别确认两种工具可用即可。Codex 提供运行环境定位工具时也可用其返回路径。
 - **全部本地候选均不可用时才下载缺失组件。** 新下载固定落在 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/`：Python 放 `python/`，FFmpeg/FFprobe 放 `ffmpeg/bin/`；非 Windows 使用用户缓存目录下同名稳定目录。缺 Python 模块只补模块，不重装已有解释器；缺 FFprobe 不代表已有 FFmpeg 失效。禁止把运行环境下载到任务目录、日期目录或每次新建的临时目录。下载来源采用官方或项目认可发行源，安装完成后执行上述检查，失败则报告具体缺项，不循环重复下载。
 - 主流程只探测/准备一次，将确认的绝对路径和版本写到稳定目录的 `runtime-paths.json` 供以后优先核验复用；该记录不是免检凭据，路径失效才重新探测。命令使用选定 Python 的绝对路径，并在当前进程设置 FFMPEG、FFPROBE、PYTHONUTF8=1；示例中的 `python` 均指这个解释器。子代理继承同一组路径，不单独安装；无需修改系统 PATH 或重复复制工具到项目。
 
 ### 默认节省重复工作
 
 - 文档按阶段读取：整理读 project/shot-requirements，审查读 review，聚合读 planning；已读且未变的规则不反复展开。组级审查同时读 auto-repair 的证据字段；达到返修条件才展开执行部分和固定工作流技能。默认不读公开模型旧模式、修图文档。
+- 缩短墙钟只合并「工具往返」，不合并「审查范围」。互不依赖的调用（读多份文档、读多张候选帧、探测命令）必须在同一条助手消息里并行发出；整理→`validate`→`import-video`→`baseline`→`extract` 这类不改变项目状态、仅有先后顺序的连续命令应拼进一条 shell 调用一次跑完。项目写回（`.lock`）、付费提交、补帧后重新 `map`/`context`/`review` 始终串行；每镜仍须各自查看候选帧，不得为省请求而跳过取证。
 - 维持完整提取、整组匹配、批量审查三个阶段；串行路径三次判断，并行路径增加审查任务及一次协调判断，目标是缩短墙钟时间。已有完整、有效的结构化输入复用，只补缺项；不得把字段齐全当作语义已校对。审查一次产出逐镜结论、连续性及省图依据，规划和渲染不再发起一次同内容的 LLM 评判。
 - context 每组获取一次并保存在内部文件，后续按需读取；不反复向代理倾倒整个项目、历史审查或同一组上下文。完整证据和所有当前候选仍保留，不能裁掉连续帧、边界或待检查项来缩短上下文。
 - 工具在一次 context、规划或渲染操作内复用 SHA256、证据文件解析和组级校验；返回前对读过的依赖重新计算完整 SHA256，变化则报错重读。缓存不跨操作，不用大小/时间戳代替哈希，不把缓存当作新的视觉通过结论。无需手动重复运行相同校验命令。
