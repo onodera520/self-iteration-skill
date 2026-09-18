@@ -90,11 +90,11 @@ with locked(project_path):
 
 selection 为 `{"shot_id":"S01","path":"候选路径","source":{"kind":"frame","time":0.25},"reason":"关键状态清楚"}`；缺失或不确定镜头不强选图。匹配与观察不启动费用。
 
-## 一次组级审查，逐镜独立结论
+## 批量组级审查，逐镜独立结论
 
 执行时只获取一次本组 context，保存完整结果供本次审查使用，不为每镜重新获取。已经按图片哈希记录的事实和解释直接复用，只对观察缺漏、矛盾或新帧补看；不能复用已失效的 PASS。审查表一次写完并登记；工具报多个字段错误时集中修正，非视觉格式错误不触发重新看全组。context 内部共享同组映射校验，操作结束仍完整重验依赖 SHA256；下一次命令重新建缓存。规划直接消费本次审查的取舍依据，不再重复逐镜问是否省图。
 
-previs.py context 一次输出全组 requirements、event（初分）、planned_duration/duration_source、narrative_plan、review_scope、scene_id/continuity_id、资产及哈希、视频/帧/映射、选帧、左右来源组边界、review_schema: 5、reference_policy_version: 5、context_fingerprint 和 previous_review。一次 LLM 完成全组校对、自然边界、相邻承接、整个合并区间复杂度核对、连续性与取舍依据，一次 previs.py review 保存。禁止逐镜 context/review；旧 storyboard.py 单镜 review 不代替此入口。事件划分以脚本行动目标及承接为准，不随视频错误改变；若发现事件标注有误，先修正完整事件字段并重新取得绑定上下文，再保存审查，不直接复制旧 PASS。有 narrative_plan 时，审查必须填写 grouping_checked: true；其含义是已核对批量剧情依据，不表示画面通过。普通路径仍是整理、匹配、审查三次判断。
+previs.py context 一次输出全组 requirements、event（初分）、planned_duration/duration_source、narrative_plan、review_scope、scene_id/continuity_id、资产及哈希、视频/帧/映射、选帧、左右来源组边界、review_schema: 5、reference_policy_version: 5、context_fingerprint 和 previous_review。串行时一次 LLM 完成全组校对、自然边界、相邻承接、整个合并区间复杂度核对、连续性与取舍依据，一次 previs.py review 保存。具备多个完整事件和子代理时，默认按 [双任务审查](parallel-review.md) 分配最多两个只读任务，复用同一脚本和工具计算的状态；主流程核对边界画面与状态、有限争议和跨任务省图依据，用 parallel_review.py commit 一次校验写回。通过镜头无新矛盾不重看；所有共享状态只由主流程修改。禁止逐镜 context/review；旧 storyboard.py 单镜 review 不代替此入口。事件划分以脚本行动目标及承接为准，不随视频错误改变；若发现事件标注有误，先修正完整事件字段并重新取得绑定上下文，再保存审查，不直接复制旧 PASS。有 narrative_plan 时，审查必须填写 grouping_checked: true；其含义是已核对批量剧情依据，不表示画面通过。串行路径仍是整理、匹配、审查三次判断；并行任务与协调会增加判断次数，不把三个阶段说成三次调用。
 
 优先用可用视频理解能力；否则看切点前后和镜头内部连续帧。复用已有哈希观察，只补充新证据。composition 仅用“脚本 shot_size/关键帧所需剧情信息及明确严格要求 → 已有画面描述 → 满足/违反/必要证据不足”的规则，不加开放式视觉推理或审美评判。景别名称或站位不同但必要信息清楚则 PASS；裁掉必要道具/关系则按证据 FAIL 或 uncertain。遮挡、画外和特写裁切不等于道具消失。
 
@@ -209,7 +209,7 @@ S01 女孩持钥匙；S02 同场景观察无关键变化；S03 钥匙交接完�
 | 2 全组匹配 | 三镜要求、全部候选及实际时间 | 三镜映射、哈希观察、选帧理由 | map、顺序 select、一次组 context |
 | 3 全组校对与推导 | context、已存观察、连续帧/视频 | 三镜独立结论、三项总检查、证据、取舍、边界及 grouping_checked | 一次组 review、规则规划、两表渲染 |
 
-正常路径由“3 提取＋1 匹配＋3 审查”的 7 次 LLM 判断合并为 3 次；旧逐镜 context/review 共 6 次工具往返变为一次组 context＋一次组 review 共 2 次。工具抽帧、登记和渲染另计。此为调用设计，不是实测耗时；补查如实增加判断，质量优先。
+上述单事件串行路径由“3 提取＋1 匹配＋3 审查”的 7 次 LLM 判断合并为 3 次；旧逐镜 context/review 共 6 次工具往返变为一次组 context＋一次组 review 共 2 次。工具抽帧、登记和渲染另计。此为调用设计，不是实测耗时；补查如实增加判断，质量优先。
 
 正常 S01/S03 保留，S02 可推导省图且标建议/未验证。模拟 S02 漏镜时先补查，确认 absent 后若前后通过且满足推导/硬规则，可给省图建议但仍保留漏镜结论；若必要或不确定则分别计数或待检查。测试覆盖剧情等效通过、关键错误、重新抽帧纠正、混合结果、来源失效、阈值、无时长可审查但聚合待规划、建议时长及剧情三步合并；合成颜色视频只验证实际抽帧/PTS，模拟语义判断不当作真实视觉验收。
 

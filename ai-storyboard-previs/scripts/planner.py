@@ -30,27 +30,62 @@ def sourced(value):
     return isinstance(value, dict) and value.get("kind") in ("script", "asset", "inference") and isinstance(value.get("ref"), str) and bool(value["ref"].strip())
 
 
-def validate_facts(p):
-    assets = {a["id"] for a in p["assets"]}
-    for s in p["shots"]:
-        require(isinstance(s.get("facts"), list) and s["facts"], "sourced facts required: " + s["id"])
-        keys = []
-        for f in s["facts"]:
-            require(f.get("entity") in assets and isinstance(f.get("attribute"), str) and f["attribute"], "invalid fact entity/attribute")
-            require(f.get("status") in ("known", "unknown") and f.get("phase") in ("static", "before", "after"), "fact status/phase required")
-            require(type(f.get("critical")) is bool and sourced(f.get("source")), "fact critical/source required")
-            require("value" in f and (f["value"] is not None or f["status"] == "unknown"), "known fact needs value")
-            keys.append((f["entity"], f["attribute"], f["phase"]))
-        require(len(keys) == len(set(keys)), "duplicate fact slot in " + s["id"])
-        require(isinstance(s.get("state_changes"), list), "state_changes array required")
-        for change in s["state_changes"]:
-            require(change.get("entity") in assets and change.get("attribute") and all(k in change for k in ("before", "after")), "invalid state change")
-            require(type(change.get("critical")) is bool and type(change.get("authorized")) is bool and sourced(change.get("source")), "state change provenance required")
-        assessment = s.get("omission_assessment", {})
-        require((type(assessment.get("allowed")) is bool or assessment.get("allowed") is None) and assessment.get("risk") in ("low", "medium", "high", "unknown"), "omission assessment required")
-        require(sourced(assessment.get("source")) and assessment.get("rationale"), "omission rationale/source required")
-        intent = s.get("intent", {})
-        require(all(type(intent.get(k)) is bool for k in ("critical_result", "narrative_turn", "required_cut")), "explicit intent flags required")
+def validate_facts(p, report=None, present_only=False):
+    from validation import Report, text, shot_path
+    own = report is None
+    report = report if report is not None else Report()
+    assets = {a['id'] for a in p['assets']}
+    for i, s in enumerate(p['shots']):
+        path = shot_path(s, i)
+        # Legacy projects may omit planner fields; supplied fields must be valid.
+        facts = s.get('facts')
+        if not present_only or 'facts' in s:
+            if report.kind(facts, list, path + '.facts'):
+                report.check(bool(facts), path + '.facts', 'sourced facts required: ' + s['id'])
+                keys = set()
+                for j, f in enumerate(facts):
+                    where = f'{path}.facts[{j}]'
+                    if not report.kind(f, dict, where):
+                        continue
+                    entity_ok = report.check(text(f.get('entity')) and f['entity'] in assets, where + '.entity', 'invalid fact entity/attribute')
+                    attr_ok = report.check(text(f.get('attribute')), where + '.attribute', 'invalid fact entity/attribute')
+                    report.check(f.get('status') in ('known', 'unknown'), where + '.status', 'fact status/phase required')
+                    phase_ok = report.check(f.get('phase') in ('static', 'before', 'after'), where + '.phase', 'fact status/phase required')
+                    report.check(type(f.get('critical')) is bool, where + '.critical', 'fact critical/source required')
+                    report.check(sourced(f.get('source')), where + '.source', 'fact critical/source required')
+                    report.check('value' in f and (f['value'] is not None or f.get('status') == 'unknown'), where + '.value', 'known fact needs value')
+                    if entity_ok and attr_ok and phase_ok:
+                        key = (f['entity'], f['attribute'], f['phase'])
+                        report.check(key not in keys, where, 'duplicate fact slot in ' + s['id'])
+                        keys.add(key)
+        if not present_only or 'state_changes' in s:
+            rows = s.get('state_changes')
+            if report.kind(rows, list, path + '.state_changes'):
+                for j, change in enumerate(rows):
+                    where = f'{path}.state_changes[{j}]'
+                    if not report.kind(change, dict, where):
+                        continue
+                    report.check(text(change.get('entity')) and change['entity'] in assets, where + '.entity', 'invalid state change')
+                    report.check(text(change.get('attribute')), where + '.attribute', 'invalid state change')
+                    for name in ('before', 'after'):
+                        report.check(name in change, where + '.' + name, 'invalid state change')
+                    for name in ('critical', 'authorized'):
+                        report.check(type(change.get(name)) is bool, where + '.' + name, 'state change provenance required')
+                    report.check(sourced(change.get('source')), where + '.source', 'state change provenance required')
+        if not present_only or 'omission_assessment' in s:
+            assessment = s.get('omission_assessment', {})
+            if report.kind(assessment, dict, path + '.omission_assessment'):
+                report.check(type(assessment.get('allowed')) is bool or assessment.get('allowed') is None, path + '.omission_assessment.allowed', 'omission assessment required')
+                report.check(assessment.get('risk') in ('low', 'medium', 'high', 'unknown'), path + '.omission_assessment.risk', 'omission assessment required')
+                report.check(sourced(assessment.get('source')), path + '.omission_assessment.source', 'omission rationale/source required')
+                report.check(text(assessment.get('rationale')), path + '.omission_assessment.rationale', 'omission rationale/source required')
+        if not present_only or 'intent' in s:
+            intent = s.get('intent', {})
+            if report.kind(intent, dict, path + '.intent'):
+                for name in ('critical_result', 'narrative_turn', 'required_cut'):
+                    report.check(type(intent.get(name)) is bool, path + '.intent.' + name, 'explicit intent flags required')
+    if own:
+        report.finish()
 
 
 def fact_key(f):

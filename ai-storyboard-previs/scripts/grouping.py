@@ -7,37 +7,44 @@ SHORT_SECONDS = Decimal('8')
 MAX_SHOTS = 12
 
 
-def validate_metadata(p):
-    from previs import require, number
-    def source(value):
-        return (isinstance(value, dict) and value.get('kind') in ('script', 'inference')
-                and isinstance(value.get('ref'), str) and bool(value['ref'].strip()))
-    for s in p['shots']:
+def validate_metadata(p, report=None):
+    from previs import number
+    from validation import Report, sourced, text, text_array, shot_path
+    own = report is None
+    report = report if report is not None else Report()
+    for i, s in enumerate(p['shots']):
         if 'duration_source' in s:
-            require(source(s['duration_source']), 'duration_source needs script/inference and ref')
-            require(number(s.get('duration')) and s['duration'] > 0, 'duration_source requires positive duration')
+            path = shot_path(s, i)
+            report.check(sourced(s['duration_source'], ('script', 'inference')), path + '.duration_source', 'duration_source needs script/inference and ref')
+            report.check(number(s.get('duration')) and s['duration'] > 0, path + '.duration', 'duration_source requires positive duration')
     data = p.get('narrative_plan')
-    if data is None:
-        return
-    require(isinstance(data, dict) and source(data.get('source')), 'narrative_plan source required')
-    ids = [s['id'] for s in p['shots']]
-    edges = data.get('boundaries')
-    require(isinstance(edges, list) and all(isinstance(e, dict) for e in edges)
-            and [e.get('before_shot_id') for e in edges] == ids[1:],
-            'narrative boundaries must cover all adjacent shots in order')
-    for edge in edges:
-        require(type(edge.get('merge_allowed')) is bool and type(edge.get('strength')) is int
-                and 0 <= edge['strength'] <= 3 and isinstance(edge.get('reason'), str) and edge['reason'].strip(),
-                'boundary needs merge_allowed, strength 0..3 and reason')
-    spans = data.get('safe_spans')
-    require(isinstance(spans, list), 'whole-interval complexity safe_spans required')
-    for span in spans:
-        require(isinstance(span, dict), 'safe span must be an object')
-        seq = span.get('shot_ids')
-        require(isinstance(seq, list) and seq and seq[0] in ids, 'invalid safe span')
-        i = ids.index(seq[0])
-        require(ids[i:i+len(seq)] == seq and isinstance(span.get('reason'), str) and span['reason'].strip(),
-                'safe span must be contiguous and explain whole-interval complexity')
+    if data is not None and report.kind(data, dict, 'narrative_plan'):
+        report.check(sourced(data.get('source'), ('script', 'inference')), 'narrative_plan.source', 'narrative_plan source required')
+        ids = [s['id'] for s in p['shots']]
+        edges = data.get('boundaries')
+        if report.kind(edges, list, 'narrative_plan.boundaries'):
+            report.check(all(isinstance(e, dict) for e in edges) and [e.get('before_shot_id') for e in edges] == ids[1:],
+                         'narrative_plan.boundaries', 'narrative boundaries must cover all adjacent shots in order')
+            for i, edge in enumerate(edges):
+                path = f'narrative_plan.boundaries[{i}]'
+                if not report.kind(edge, dict, path):
+                    continue
+                report.check(type(edge.get('merge_allowed')) is bool, path + '.merge_allowed', 'boundary needs merge_allowed boolean')
+                report.check(type(edge.get('strength')) is int and 0 <= edge['strength'] <= 3, path + '.strength', 'boundary needs strength 0..3')
+                report.check(text(edge.get('reason')), path + '.reason', 'boundary reason required')
+        spans = data.get('safe_spans')
+        if report.kind(spans, list, 'narrative_plan.safe_spans'):
+            for i, span in enumerate(spans):
+                path = f'narrative_plan.safe_spans[{i}]'
+                if not report.kind(span, dict, path):
+                    continue
+                seq = span.get('shot_ids')
+                report.check(text(span.get('reason')), path + '.reason', 'safe span must explain whole-interval complexity')
+                if report.check(text_array(seq) and bool(seq) and seq[0] in ids, path + '.shot_ids', 'invalid safe span'):
+                    start = ids.index(seq[0])
+                    report.check(ids[start:start+len(seq)] == seq, path + '.shot_ids', 'safe span must be contiguous and explain whole-interval complexity')
+    if own:
+        report.finish()
 
 
 def partition(p, blocked_starts=()):

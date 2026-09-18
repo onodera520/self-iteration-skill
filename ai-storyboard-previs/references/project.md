@@ -1,6 +1,41 @@
 # 内部数据与用户交付
 
-以 assets/example-project.json 建立内部项目。用户只提供视频、原脚本、资产图，不必填 JSON。一次整理完整脚本后统一校验，来源不明保留 unknown/inference；路径相对项目文件或使用绝对路径。
+默认以 [已有视频三镜模板](../assets/imported-project.json) 建立内部项目；[旧兼容示例](../assets/example-project.json) 保留供旧流程使用。用户只提供视频、原脚本、资产图，不必填 JSON。一次整理完整脚本后统一校验，来源不明保留 unknown/inference；路径相对项目文件或使用绝对路径。模板只示范结构与建议时长，不含真实图片、视频或已通过的审查结论，必须替换为本次脚本与资产。
+
+## 一次校验与字段类型
+
+整理完成后、登记视频和抽帧前，只运行一次 `previs.py validate 项目.json`。同一调用先检查对象、数组、必填字段与编号，再检查状态继承、来源及剧情分组；一次汇总当前能可靠判断的独立错误，按字段路径集中修正。不要逐镜运行 validate，也不要在完整校验前另开一轮 LLM 预检。校验不修改项目；错误返回非零退出码，不能进入写回或后续任务。
+
+`ERROR` 是已确认的结构/语义问题；`BLOCKED` 是因上游无效暂不能完成的检查。前镜状态无效时，不补空状态、不伪造出口状态来继续推算；独立镜头继续检查，依赖镜修正上游后再验证。缺少本地图片仍按原约定返回 missing_assets/missing_anchors，与 JSON 错误分开；真实证据、SHA256 和付费安全检查仍在使用前执行，不以本次校验替代。
+
+常见输入类型：
+
+| 字段 | JSON 类型与约定 |
+| --- | --- |
+| facts / state_changes | 对象数组；facts 非空，state_changes 无变化用 `[]`，不是字符串 |
+| requirements.entry_state / keyframe.state | 对象；无新增入口种子用 `{}`；不手写 exit_state |
+| requirements.must_have / must_not_have | 字符串数组，例如 `["男孩接住钥匙"]` |
+| requirements.provenance | 来源对象数组；每个要求块一条来源 |
+| event / duration_source / narrative_plan | 对象，完整格式见默认模板 |
+| repair_asset_style.assets[].visible_style_facts | 非空字符串数组，不能把整个列表写成一段字符串 |
+
+`repair_asset_style` 是看过真实资产后填写的准备数据，基础模板不伪造 SHA256。仅校对的旧项目可省略；一旦填写就提前检查格式，进入返修提示词前仍须检查完整资产覆盖及当前哈希。精确片段如下（sha256 必须替换为工具实测值）：
+
+```json
+{
+  "repair_asset_style": {
+    "assets": [{
+      "asset_id": "girl",
+      "sha256": "填写工具计算的当前资产 SHA256",
+      "visible_style_facts": ["人物外套为黄色", "背景为浅色"],
+      "guidance": "沿用原资产的整体视觉风格，不改变脚本剧情"
+    }],
+    "preserves_story": true
+  }
+}
+```
+
+以上只是字段格式示意，真实内容必须来自本次资产，不复制示意中的观察。imported_videos、board_mappings、board.selected、reviews、aggregation 和实际证据哈希由现有工具流程登记，不从模板伪造已通过状态。
 
 ## 输入及内部状态
 

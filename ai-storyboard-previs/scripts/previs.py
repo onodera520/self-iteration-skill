@@ -71,62 +71,113 @@ def shots(p, g):
 
 
 def validate(p, project_path):
-    require(p.get("schema_version") == 1, "schema_version must be 1")
-    require(isinstance(p.get("title"), str) and p["title"].strip(), "title required")
-    require(isinstance(p.get("source_script"), str) and p["source_script"].strip(), "source_script required")
+    from validation import Report, text, text_array, sourced, shot_path, style_shape
+    report = Report()
+    check = report.check
+    if not report.kind(p, dict, '$'):
+        report.finish()
+    check(p.get("schema_version") == 1, "schema_version", "schema_version must be 1")
+    check(text(p.get("title")), "title", "title required")
+    check(text(p.get("source_script")), "source_script", "source_script required")
+    valid_collections = {}
     for kind in ("assets", "shots", "groups"):
-        require(isinstance(p.get(kind), list), kind + " must be array")
-        ids = [x.get("id") for x in p[kind]]
-        require(all(isinstance(i, str) and re.fullmatch(r"[\w-]+", i) for i in ids), "invalid IDs")
-        require(len(ids) == len(set(ids)), "duplicate " + kind + " ID")
-    require(p["shots"] and p["groups"], "shots and groups required")
-    assets = {a["id"] for a in p["assets"]}
-    event_shots = [s for s in p["shots"] if "event" in s]
-    require(not event_shots or len(event_shots) == len(p["shots"]), "event blocks must cover every shot or be absent for legacy projects")
+        valid = report.kind(p.get(kind), list, kind)
+        seen = set()
+        for i, row in enumerate(p[kind] if valid else []):
+            if not report.kind(row, dict, f'{kind}[{i}]'):
+                valid = False
+                continue
+            rid = row.get('id')
+            if not check(isinstance(rid, str) and re.fullmatch(r'[\w-]+', rid), f'{kind}[{i}].id', 'invalid IDs'):
+                valid = False
+            elif not check(rid not in seen, f'{kind}[{i}].id', 'duplicate ' + kind + ' ID'):
+                valid = False
+            else:
+                seen.add(rid)
+        valid_collections[kind] = valid
+    asset_rows = [a for a in p.get('assets', []) if isinstance(a, dict)] if isinstance(p.get('assets'), list) else []
+    shot_rows = [s for s in p.get('shots', []) if isinstance(s, dict)] if isinstance(p.get('shots'), list) else []
+    group_rows = [g for g in p.get('groups', []) if isinstance(g, dict)] if isinstance(p.get('groups'), list) else []
+    check(bool(shot_rows) and bool(group_rows), 'shots/groups', 'shots and groups required')
+    assets = {a['id'] for a in asset_rows if isinstance(a.get('id'), str)}
+    c = p.get('config', {})
+    config_ok = report.kind(c, dict, 'config')
+    if not config_ok:
+        c = {}  # Diagnostic scope only; no project defaults are written.
+    event_shots = [s for s in shot_rows if "event" in s]
+    check(not event_shots or len(event_shots) == len(shot_rows), 'shots.event', "event blocks must cover every shot or be absent for legacy projects")
     event_summaries = {}
     for s in event_shots:
+        path = shot_path(s, shot_rows.index(s)) + '.event'
         event = s["event"]
-        require(isinstance(event, dict), "event must be an object")
-        require(isinstance(event.get("id"), str) and re.fullmatch(r"[\w-]+", event["id"]), "invalid event ID")
-        require(isinstance(event.get("summary"), str) and event["summary"].strip(), "event summary required")
-        source = event.get("source", {})
-        require(isinstance(source, dict) and source.get("kind") in ("script", "asset", "inference")
-                and isinstance(source.get("ref"), str) and source["ref"].strip(), "event source required")
-        require(event["id"] not in event_summaries or event_summaries[event["id"]] == event["summary"], "same event ID needs the same summary")
-        event_summaries[event["id"]] = event["summary"]
-    missing = []
-    for a in p["assets"]:
-        require(a.get("kind") in ("character", "scene", "prop"), "invalid asset kind")
-    for s in p["shots"]:
-        if p.get("config", {}).get("video_source") != "imported" or s.get("duration") is not None:
-            require(number(s.get("duration")) and s["duration"] > 0, "positive shot duration required")
-        require(all(isinstance(s.get(k), str) and s[k].strip() for k in ("script", "scene_id", "continuity_id", "required_result")), "shot narrative fields required")
-        require(set(s.get("asset_ids", [])) <= assets, "unknown asset")
+        if not report.kind(event, dict, path):
+            continue
+        id_ok = check(isinstance(event.get('id'), str) and re.fullmatch(r'[\w-]+', event['id']), path + '.id', 'invalid event ID')
+        summary_ok = check(text(event.get('summary')), path + '.summary', 'event summary required')
+        check(sourced(event.get('source')), path + '.source', 'event source required')
+        if id_ok and summary_ok:
+            check(event['id'] not in event_summaries or event_summaries[event['id']] == event['summary'], path + '.summary', 'same event ID needs the same summary')
+            event_summaries[event['id']] = event['summary']
+    for i, a in enumerate(asset_rows):
+        check(a.get("kind") in ("character", "scene", "prop"), f'assets[{i}].kind', "invalid asset kind")
+        if a.get('path') is not None:
+            check(text(a['path']), f'assets[{i}].path', 'asset path must be text')
+    for i, s in enumerate(shot_rows):
+        path = shot_path(s, i)
+        if (config_ok and c.get("video_source") != "imported") or s.get("duration") is not None:
+            check(number(s.get("duration")) and s["duration"] > 0, path + '.duration', "positive shot duration required")
+        for key in ('script', 'scene_id', 'continuity_id', 'required_result'):
+            check(text(s.get(key)), path + '.' + key, 'shot narrative fields required')
+        if check(text_array(s.get('asset_ids', [])), path + '.asset_ids', 'asset_ids must be text array'):
+            if valid_collections['assets']:
+                check(set(s.get('asset_ids', [])) <= assets, path + '.asset_ids', 'unknown asset')
+            else:
+                report.block(path + '.asset_ids', 'asset IDs invalid; cannot resolve references')
         r = s.get("reference", {})
-        require(r.get("mode") in ("anchor", "ai_fill"), "invalid reference mode")
-        require(r.get("role") in ("start", "representative", "end"), "invalid reference role")
-        require(isinstance(r.get("reason"), str) and r["reason"].strip(), "reference reason required")
-        if r["mode"] == "anchor" and (not r.get("path") or not resolve(project_path, r["path"]).is_file()):
-            missing.append(s["id"])
-    require([sid for g in p["groups"] for sid in g["shot_ids"]] == [s["id"] for s in p["shots"]], "groups must preserve every shot exactly once in source order")
-    for g in p["groups"]:
-        require(g["shot_ids"] and isinstance(g.get("version"), int) and g["version"] >= 1, "group version and shots required")
-    c = p.get("config", {})
-    require(c.get("workflow") in (None, "video_evidence"), "invalid workflow")
-    require(c.get("video_input_mode", "anchors") in ("assets", "anchors"), "invalid video input mode")
-    for key, default in (("max_repair_rounds", 3), ("max_submissions", 0)):
-        require(type(c.get(key, default)) is int and c.get(key, default) >= 0, key + " must be nonnegative integer")
-    require(type(p.get("repair_round", 0)) is int and p.get("repair_round", 0) >= 0, "invalid repair_round")
-    if "budget_cny" in c:
-        require(number(c["budget_cny"]) and c["budget_cny"] >= 0, "invalid budget")
+        if report.kind(r, dict, path + '.reference'):
+            check(r.get('mode') in ('anchor', 'ai_fill'), path + '.reference.mode', 'invalid reference mode')
+            check(r.get('role') in ('start', 'representative', 'end'), path + '.reference.role', 'invalid reference role')
+            check(text(r.get('reason')), path + '.reference.reason', 'reference reason required')
+            if r.get('path') is not None:
+                check(text(r['path']), path + '.reference.path', 'reference path must be text')
+    sequence_ok = valid_collections['shots'] and valid_collections['groups']
+    for i, g in enumerate(group_rows):
+        path = f'groups[{g.get("id", i)}]'
+        sequence_ok = check(text_array(g.get('shot_ids')) and bool(g.get('shot_ids')), path + '.shot_ids', 'group shots must be nonempty text array') and sequence_ok
+        check(type(g.get('version')) is int and g['version'] >= 1, path + '.version', 'group version and shots required')
+    if sequence_ok:
+        check([sid for g in group_rows for sid in g['shot_ids']] == [s['id'] for s in shot_rows], 'groups.shot_ids', 'groups must preserve every shot exactly once in source order')
+    else:
+        report.block('groups.shot_ids', 'invalid shot/group IDs or lists; cannot check source order')
+    if config_ok:
+        check(c.get('workflow') in (None, 'video_evidence'), 'config.workflow', 'invalid workflow')
+        check(c.get('video_input_mode', 'anchors') in ('assets', 'anchors'), 'config.video_input_mode', 'invalid video input mode')
+        for key, default in (("max_repair_rounds", 3), ("max_submissions", 0)):
+            check(type(c.get(key, default)) is int and c.get(key, default) >= 0, 'config.' + key, key + " must be nonnegative integer")
+        if 'budget_cny' in c:
+            check(number(c['budget_cny']) and c['budget_cny'] >= 0, 'config.budget_cny', 'invalid budget')
+    check(type(p.get('repair_round', 0)) is int and p.get('repair_round', 0) >= 0, 'repair_round', 'invalid repair_round')
+    style_shape(p, report)
     from requirements import contexts
-    contexts(p)
     from grouping import validate_metadata
-    validate_metadata(p)
+    from planner import validate_facts
+    if valid_collections['shots'] and valid_collections['assets']:
+        validate_facts(p, report=report, present_only=True)
+    else:
+        report.block('shots.facts', 'invalid shot/asset IDs; cannot resolve sourced facts')
+    if valid_collections['shots']:
+        contexts(p, report=report)
+        validate_metadata(p, report=report)
+    else:
+        report.block('shots', 'invalid shot IDs/objects; cannot resolve states or narrative metadata')
+    # No file checks, partial success, or mutation until all in-memory checks pass.
+    report.finish()
     if c.get("video_input_mode") == "assets":
-        used = {aid for s in p["shots"] for aid in s["asset_ids"]}
+        used = {aid for s in p["shots"] for aid in s.get("asset_ids", [])}
         missing_assets = [a["id"] for a in p["assets"] if a["id"] in used and (not a.get("path") or not resolve(project_path, a["path"]).is_file())]
         return {"shots": len(p["shots"]), "groups": len(p["groups"]), "missing_assets": missing_assets}
+    missing = [s['id'] for s in p['shots'] if s['reference']['mode'] == 'anchor'
+               and (not s['reference'].get('path') or not resolve(project_path, s['reference']['path']).is_file())]
     return {"shots": len(p["shots"]), "groups": len(p["groups"]), "missing_anchors": missing}
 
 

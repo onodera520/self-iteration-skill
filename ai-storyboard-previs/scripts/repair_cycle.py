@@ -139,6 +139,10 @@ def current_decision(p, project, gid):
 
 def asset_style(p, assets):
     """Agent supplies grounded observations once; tool binds them to original assets."""
+    from validation import Report, style_shape
+    report = Report()
+    style_shape(p, report)
+    report.finish()
     profile = p.get('repair_asset_style', {})
     rows = profile.get('assets', [])
     core.require(isinstance(rows, list) and len(rows) == len(assets) and

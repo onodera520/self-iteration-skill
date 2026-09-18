@@ -1,0 +1,491 @@
+{
+  "schema_version": 1,
+  "title": "已有视频校对模板：钥匙交接（三镜）",
+  "source_script": "S01 门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。\nS02 手部特写，女孩把红挂件钥匙向男孩递出。\nS03 中景，男孩接住钥匙，女孩松手。",
+  "assets": [
+    {
+      "id": "girl",
+      "kind": "character",
+      "description": "黄外套女孩",
+      "path": "assets/girl.png"
+    },
+    {
+      "id": "boy",
+      "kind": "character",
+      "description": "蓝外套男孩",
+      "path": "assets/boy.png"
+    },
+    {
+      "id": "hall",
+      "kind": "scene",
+      "description": "木门旁的门厅及门外",
+      "path": "assets/hall.png"
+    },
+    {
+      "id": "key",
+      "kind": "prop",
+      "description": "带红色挂件的钥匙",
+      "path": "assets/key.png"
+    }
+  ],
+  "shots": [
+    {
+      "id": "S01",
+      "script": "门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。",
+      "scene_id": "hall",
+      "continuity_id": "handoff",
+      "duration": 2,
+      "asset_ids": [
+        "girl",
+        "boy",
+        "hall",
+        "key"
+      ],
+      "required_result": "清楚建立两个人与钥匙的位置。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "representative",
+        "reason": "初始兼容值，不代表已审查；抽帧校对后独立决定是否省图。"
+      },
+      "facts": [
+        {
+          "entity": "girl",
+          "attribute": "coat",
+          "value": "yellow",
+          "status": "known",
+          "phase": "static",
+          "critical": false,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "boy",
+          "attribute": "coat",
+          "value": "blue",
+          "status": "known",
+          "phase": "static",
+          "critical": false,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "key",
+          "attribute": "fob_color",
+          "value": "red",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "key",
+          "attribute": "holder",
+          "value": "girl",
+          "status": "known",
+          "phase": "before",
+          "critical": true,
+          "source": {
+            "kind": "script",
+            "ref": "S01：门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。"
+          }
+        }
+      ],
+      "state_changes": [],
+      "intent": {
+        "critical_result": false,
+        "narrative_turn": false,
+        "required_cut": false
+      },
+      "omission_assessment": {
+        "allowed": false,
+        "risk": "high",
+        "rationale": "建立身份、确认交接结果或场景变化，保留参考图。",
+        "source": {
+          "kind": "inference",
+          "ref": "首版示例的显式语义评估，尚未经过真实生成验证"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "建立人物与道具关系",
+        "inherits_from": null,
+        "entry_state": {
+          "key.holder": "girl"
+        },
+        "keyframe": {
+          "phase": "exit",
+          "description": "女孩展示唯一的红挂件钥匙，男孩在木门旁",
+          "state": {}
+        },
+        "must_have": [
+          "女孩持有钥匙",
+          "两人及木门的位置清楚可见"
+        ],
+        "must_not_have": [
+          "男孩提前持有钥匙",
+          "复制出第二把钥匙"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S01 原脚本及按原顺序连续交接事件"
+          }
+        ]
+      },
+      "duration_source": {
+        "kind": "inference",
+        "ref": "示例建议时长；真实脚本给定时使用原值并改为 script"
+      },
+      "event": {
+        "id": "E01",
+        "summary": "女孩递出钥匙，男孩接住，完成交接",
+        "source": {
+          "kind": "inference",
+          "ref": "S01 至 S03 的连续交接事件"
+        }
+      },
+      "shot_design": "门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。"
+    },
+    {
+      "id": "S02",
+      "script": "手部特写，女孩把红挂件钥匙向男孩递出。",
+      "scene_id": "hall",
+      "continuity_id": "handoff",
+      "duration": 1.5,
+      "asset_ids": [
+        "girl",
+        "boy",
+        "key"
+      ],
+      "required_result": "女孩仍持钥匙并向男孩伸手。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "start",
+        "reason": "初始兼容值，不代表已审查；抽帧校对后独立决定是否省图。"
+      },
+      "facts": [
+        {
+          "entity": "girl",
+          "attribute": "coat",
+          "value": "yellow",
+          "status": "known",
+          "phase": "static",
+          "critical": false,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "boy",
+          "attribute": "coat",
+          "value": "blue",
+          "status": "known",
+          "phase": "static",
+          "critical": false,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "key",
+          "attribute": "fob_color",
+          "value": "red",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "key",
+          "attribute": "holder",
+          "value": "girl",
+          "status": "known",
+          "phase": "before",
+          "critical": true,
+          "source": {
+            "kind": "script",
+            "ref": "S02：手部特写，女孩把红挂件钥匙向男孩递出。"
+          }
+        }
+      ],
+      "state_changes": [],
+      "intent": {
+        "critical_result": false,
+        "narrative_turn": false,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": true,
+        "risk": "low",
+        "rationale": "已有锚点说明人物及道具；递出特写的低运动量过程可候选补足，必须实际检查特写和交接前持物。",
+        "source": {
+          "kind": "inference",
+          "ref": "首版示例的显式语义评估，尚未经过真实生成验证"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "展示递出动作，尚未完成交接",
+        "inherits_from": "S01",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "手部特写，女孩仍握着钥匙向男孩伸出",
+          "state": {}
+        },
+        "must_have": [
+          "手部特写",
+          "钥匙仍由女孩持有"
+        ],
+        "must_not_have": [
+          "交接已完成",
+          "复制出第二把钥匙"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S02 原脚本及按原顺序连续交接事件"
+          }
+        ]
+      },
+      "duration_source": {
+        "kind": "inference",
+        "ref": "示例建议时长；真实脚本给定时使用原值并改为 script"
+      },
+      "event": {
+        "id": "E01",
+        "summary": "女孩递出钥匙，男孩接住，完成交接",
+        "source": {
+          "kind": "inference",
+          "ref": "S01 至 S03 的连续交接事件"
+        }
+      },
+      "shot_design": "手部特写，女孩把红挂件钥匙向男孩递出。"
+    },
+    {
+      "id": "S03",
+      "script": "中景，男孩接住钥匙，女孩松手。",
+      "scene_id": "hall",
+      "continuity_id": "handoff",
+      "duration": 2,
+      "asset_ids": [
+        "girl",
+        "boy",
+        "hall",
+        "key"
+      ],
+      "required_result": "钥匙最终只在男孩手中。",
+      "reference": {
+        "mode": "anchor",
+        "path": null,
+        "role": "end",
+        "reason": "初始兼容值，不代表已审查；抽帧校对后独立决定是否省图。"
+      },
+      "facts": [
+        {
+          "entity": "girl",
+          "attribute": "coat",
+          "value": "yellow",
+          "status": "known",
+          "phase": "static",
+          "critical": false,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "boy",
+          "attribute": "coat",
+          "value": "blue",
+          "status": "known",
+          "phase": "static",
+          "critical": false,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "key",
+          "attribute": "fob_color",
+          "value": "red",
+          "status": "known",
+          "phase": "static",
+          "critical": true,
+          "source": {
+            "kind": "asset",
+            "ref": "角色与道具资产描述"
+          }
+        },
+        {
+          "entity": "key",
+          "attribute": "holder",
+          "value": "girl",
+          "status": "known",
+          "phase": "before",
+          "critical": true,
+          "source": {
+            "kind": "script",
+            "ref": "S03：中景，男孩接住钥匙，女孩松手。"
+          }
+        },
+        {
+          "entity": "key",
+          "attribute": "holder",
+          "value": "boy",
+          "status": "known",
+          "phase": "after",
+          "critical": true,
+          "source": {
+            "kind": "script",
+            "ref": "S03：钥匙最终只在男孩手中"
+          }
+        }
+      ],
+      "state_changes": [
+        {
+          "entity": "key",
+          "attribute": "holder",
+          "before": "girl",
+          "after": "boy",
+          "critical": true,
+          "authorized": true,
+          "source": {
+            "kind": "script",
+            "ref": "S03：男孩接住钥匙，女孩松手"
+          }
+        }
+      ],
+      "intent": {
+        "critical_result": true,
+        "narrative_turn": false,
+        "required_cut": true
+      },
+      "omission_assessment": {
+        "allowed": false,
+        "risk": "high",
+        "rationale": "建立身份、确认交接结果或场景变化，保留参考图。",
+        "source": {
+          "kind": "inference",
+          "ref": "首版示例的显式语义评估，尚未经过真实生成验证"
+        }
+      },
+      "requirements": {
+        "version": 1,
+        "status": "ready",
+        "purpose": "确认交接完成",
+        "inherits_from": "S02",
+        "entry_state": {},
+        "keyframe": {
+          "phase": "exit",
+          "description": "男孩拿稳唯一的钥匙，女孩已经松手",
+          "state": {}
+        },
+        "must_have": [
+          "钥匙仅在男孩手中",
+          "女孩的交接手已松开"
+        ],
+        "must_not_have": [
+          "女孩仍握着钥匙",
+          "复制出第二把钥匙"
+        ],
+        "provenance": [
+          {
+            "field": "purpose,keyframe,must_have,must_not_have,entry_state,inherits_from",
+            "status": "script",
+            "source": "S03 原脚本及按原顺序连续交接事件"
+          }
+        ]
+      },
+      "duration_source": {
+        "kind": "inference",
+        "ref": "示例建议时长；真实脚本给定时使用原值并改为 script"
+      },
+      "event": {
+        "id": "E01",
+        "summary": "女孩递出钥匙，男孩接住，完成交接",
+        "source": {
+          "kind": "inference",
+          "ref": "S01 至 S03 的连续交接事件"
+        }
+      },
+      "shot_design": "中景，男孩接住钥匙，女孩松手。"
+    }
+  ],
+  "groups": [
+    {
+      "id": "G01",
+      "shot_ids": [
+        "S01",
+        "S02",
+        "S03"
+      ],
+      "reason": "一份用户视频应覆盖 S01 至 S03；来源组不是最终聚合结论。",
+      "version": 1
+    }
+  ],
+  "config": {
+    "workflow": "video_evidence",
+    "aspect_ratio": "16:9",
+    "max_repair_rounds": 3,
+    "max_submissions": 0,
+    "delivery_mode": "storyboard_images",
+    "video_input_mode": "assets",
+    "video_source": "imported",
+    "budget_cny": 0
+  },
+  "tasks": {},
+  "reviews": [],
+  "repairs": [],
+  "repair_round": 0,
+  "delivery": null,
+  "narrative_plan": {
+    "source": {
+      "kind": "inference",
+      "ref": "通读三镜交接脚本，未涉及真实视觉审查"
+    },
+    "boundaries": [
+      {
+        "before_shot_id": "S02",
+        "merge_allowed": true,
+        "strength": 1,
+        "reason": "同一钥匙交接的动作推进，保留脚本切镜"
+      },
+      {
+        "before_shot_id": "S03",
+        "merge_allowed": true,
+        "strength": 1,
+        "reason": "同一钥匙交接的动作推进，保留脚本切镜"
+      }
+    ],
+    "safe_spans": [
+      {
+        "shot_ids": [
+          "S01",
+          "S02",
+          "S03"
+        ],
+        "reason": "两人、一把钥匙、同一门厅内完成单一交接动作；整个区间复杂度可接受"
+      }
+    ]
+  }
+}
