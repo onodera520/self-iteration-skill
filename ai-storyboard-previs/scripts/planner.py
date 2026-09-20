@@ -30,6 +30,13 @@ def sourced(value):
     return isinstance(value, dict) and value.get("kind") in ("script", "asset", "inference") and isinstance(value.get("ref"), str) and bool(value["ref"].strip())
 
 
+def entity_error(value, assets):
+    return (f'invalid entity {value!r}; entity must match assets[].id; allowed IDs: '
+            + ', '.join(sorted(assets))
+            + '. Use the actual owning asset ID; do not invent IDs or add fake assets. '
+              'Keep unrepresented narrative requirements in requirements with provenance.')
+
+
 def validate_facts(p, report=None, present_only=False):
     from validation import Report, text, shot_path
     own = report is None
@@ -47,8 +54,8 @@ def validate_facts(p, report=None, present_only=False):
                     where = f'{path}.facts[{j}]'
                     if not report.kind(f, dict, where):
                         continue
-                    entity_ok = report.check(text(f.get('entity')) and f['entity'] in assets, where + '.entity', 'invalid fact entity/attribute')
-                    attr_ok = report.check(text(f.get('attribute')), where + '.attribute', 'invalid fact entity/attribute')
+                    entity_ok = report.check(text(f.get('entity')) and f['entity'] in assets, where + '.entity', entity_error(f.get('entity'), assets))
+                    attr_ok = report.check(text(f.get('attribute')), where + '.attribute', 'fact attribute must be nonempty text')
                     report.check(f.get('status') in ('known', 'unknown'), where + '.status', 'fact status/phase required')
                     phase_ok = report.check(f.get('phase') in ('static', 'before', 'after'), where + '.phase', 'fact status/phase required')
                     report.check(type(f.get('critical')) is bool, where + '.critical', 'fact critical/source required')
@@ -65,8 +72,8 @@ def validate_facts(p, report=None, present_only=False):
                     where = f'{path}.state_changes[{j}]'
                     if not report.kind(change, dict, where):
                         continue
-                    report.check(text(change.get('entity')) and change['entity'] in assets, where + '.entity', 'invalid state change')
-                    report.check(text(change.get('attribute')), where + '.attribute', 'invalid state change')
+                    report.check(text(change.get('entity')) and change['entity'] in assets, where + '.entity', entity_error(change.get('entity'), assets))
+                    report.check(text(change.get('attribute')), where + '.attribute', 'state change attribute must be nonempty text')
                     for name in ('before', 'after'):
                         report.check(name in change, where + '.' + name, 'invalid state change')
                     for name in ('critical', 'authorized'):
@@ -90,6 +97,26 @@ def validate_facts(p, report=None, present_only=False):
 
 def fact_key(f):
     return f["entity"] + "." + f["attribute"]
+
+
+STATE_CONFLICTS = {'baseline_conflict', 'change_start_conflict', 'unexplained_after_state'}
+
+
+def validate_ledger(p, report):
+    """Bring the existing planner gate forward for complete, well-shaped inputs."""
+    fields = {'facts', 'state_changes', 'intent', 'omission_assessment', 'asset_ids',
+              'scene_id', 'reference'}
+    if not all(fields <= set(s) for s in p['shots']):
+        return  # Legacy inputs retain their existing planning-time requirements.
+    if any(r['path'].startswith(('shots', 'assets')) for r in report.errors):
+        return  # Do not interpret malformed upstream facts.
+    for row in analyze(p):
+        for warning in row['warnings']:
+            if warning['kind'] in STATE_CONFLICTS:
+                report.check(False, f"shots[{row['shot_id']}].facts/state_changes",
+                             f"state baseline conflict: {warning['kind']}: {warning['fact']}; "
+                             f"previous={warning['previous']['value']!r}; "
+                             "reconcile source, phase and authorized change; do not rename the attribute to hide it")
 
 
 def analyze(p):
@@ -249,7 +276,7 @@ def plan(p, project_path, profile):
     require(len(p["shots"]) <= 200, "v1 planner supports up to 200 shots; partition long stories explicitly")
     analysis = analyze(p)
     # Conflicting sourced state declarations need correction; an extra anchor cannot fix them.
-    conflicts = [a["shot_id"] for a in analysis if any(w["kind"] in ("baseline_conflict", "change_start_conflict", "unexplained_after_state") for w in a["warnings"])]
+    conflicts = [a["shot_id"] for a in analysis if any(w["kind"] in STATE_CONFLICTS for w in a["warnings"])]
     require(not conflicts, "state baseline conflict; reconcile sources for " + ", ".join(conflicts))
     count = len(p["shots"])
     best = [None] * (count+1)

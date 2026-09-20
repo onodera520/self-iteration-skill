@@ -51,6 +51,19 @@ class ParallelReviewTests(fixtures.Base):
         core.save(review, self.final); core.save(audit, self.audit)
         return parallel.commit(self.path, self.bundle_dir, review, audit)
 
+    def test_prepare_worker_drafts_are_bound_but_unreviewed(self):
+        self.mapping(); core.save(self.path, self.p)
+        bundle = parallel.prepare(self.path, 'G01', self.units, self.bundle_dir)
+        for task in bundle['tasks']:
+            draft = core.read(self.bundle_dir / task['id'] / 'draft.json')
+            self.assertEqual(draft['task_id'], task['id'])
+            self.assertEqual(draft['bundle_fingerprint'], bundle['fingerprint'])
+            self.assertEqual([r['shot_id'] for r in draft['shot_reviews']], task['shot_ids'])
+            self.assertTrue(all(r['verdict'] == 'uncertain' for r in draft['shot_reviews']))
+            self.assertTrue(all(not r['observation'] for r in draft['evidence']))
+            self.assertTrue(all(r['sha256'] for r in draft['evidence']))
+        self.assertEqual(core.read(self.path), self.p)
+
     def test_end_to_end_matches_serial_planning_and_two_tables(self):
         bundle = self.prepare()
         original = copy.deepcopy(self.p)
@@ -197,6 +210,47 @@ class ParallelReviewTests(fixtures.Base):
             with self.assertRaises(FileExistsError):self.commit()
         self.commit()
         with self.assertRaisesRegex(ValueError,'project changed'):self.commit()
+
+    def test_resolution_generator_requires_reasons_and_preserves_input(self):
+        self.prepare()
+        self.final['shot_reviews'][0]['reason'] = 'SIMULATED corrected observation'
+        self.final['evidence'][0]['observation'] = 'SIMULATED revised detail'
+        self.audit['rechecked_shot_ids'] = ['S01']
+        final, audit, output = [self.path.parent / n for n in ('final.json', 'audit.json', 'new-audit.json')]
+        core.save(final, self.final); core.save(audit, self.audit)
+        before = self.path.read_bytes(), audit.read_bytes(), final.read_bytes()
+        result = parallel.resolutions(self.path, self.bundle_dir, final, audit, output)
+        self.assertEqual(len(result['resolutions']), 2)
+        for row in result['resolutions']:
+            self.assertEqual(row['record_hash'], core.digest(row['original']))
+            self.assertEqual(row['reason'], '')
+        self.audit = result
+        with self.assertRaisesRegex(ValueError, 'without resolution') as caught:
+            self.commit()
+        for row in result['resolutions']:
+            self.assertIn(row['record_hash'], str(caught.exception))
+            row['reason'] = 'SIMULATED rechecked source evidence'
+        self.assertEqual((self.path.read_bytes(), final.read_bytes()), (before[0], before[2]))
+        self.assertEqual(self.commit()['verdict'], 'PASS')
+
+    def test_resolution_generator_rejects_stale_worker_and_existing_output(self):
+        self.prepare()
+        final, audit, output = [self.path.parent / n for n in ('final.json', 'audit.json', 'new-audit.json')]
+        core.save(final, self.final); core.save(audit, self.audit)
+        parallel.resolutions(self.path, self.bundle_dir, final, audit, output)
+        with self.assertRaisesRegex(ValueError, 'new audit'):
+            parallel.resolutions(self.path, self.bundle_dir, final, audit, output)
+        draft = self.bundle_dir / 'T01/draft.json'
+        data = core.read(draft); data['shot_reviews'][0]['reason'] = 'changed'
+        core.save(draft, data)
+        with self.assertRaisesRegex(ValueError, 'drafts changed'):
+            parallel.resolutions(self.path, self.bundle_dir, final, audit, self.path.parent / 'stale.json')
+
+    def test_diff_preserves_duplicate_findings_and_dropped_limitations(self):
+        collected = dict(review=dict(uncertainties=['same', 'same'], coverage=dict(limitations=['gap'])))
+        final = dict(uncertainties=['same'], coverage=dict(limitations=[]))
+        changes = parallel.changed_records(collected, final)
+        self.assertEqual([r['field'] for r in changes], ['uncertainties', 'coverage.limitations'])
 
 
 if __name__=='__main__':

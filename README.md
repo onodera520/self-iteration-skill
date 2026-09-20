@@ -18,6 +18,8 @@
 
 用户不需要手写项目 JSON。Skill 会在内部维护视频哈希、实测时长、抽帧证据、镜头映射和审查状态；这些内部数据不属于交付物。
 
+从零整理已有视频时，建议先做路径预检，再用统一准备入口完成结构校验、视频登记、原视频基线冻结和稀疏抽帧。准备入口只检查输入和生成证据，不做视觉判断、审查登记或付费操作；这样后续审查使用的是同一份可追溯证据。
+
 审查登记完成后，可以由统一收尾入口一次完成规划、保存不可覆盖的原视频 Markdown 与图片、生成返修判定并校验交付物。这个入口只整理已经完成的审查结果，不替代视觉判断，也不会自行提交付费任务。
 
 ## 怎么判断和分组
@@ -43,6 +45,8 @@
 - 单镜头：人物、场景、道具、动作和动作结果。
 - 相邻镜头：身份、服装、位置、持物、左右手和状态承接。
 - 整段故事：是否漏镜、乱序或增加剧情，静音观看能否理解主要事件。
+
+匹配完成后可以先用 `review_draft.py prepare` 生成带镜号、时间点、证据路径和 SHA256 的审查草稿，再根据实际画面填写观察和判断。填写后用 `review_draft.py check` 批量检查结构、证据指纹和字段完整性；它是只读诊断，不会把草稿登记为正式审查，也不会自动判定画面正确。只有完成视觉审查后，才使用 `previs.py review` 正式登记结果。
 
 不检查屏幕文字、具体对白逐字一致性、配音文本或对白口型同步；对白的剧情含义和明确的画面动作仍用于理解与校对。原视频实际时长不同于计划时长不会导致画面失败。
 
@@ -114,6 +118,30 @@ powershell -ExecutionPolicy Bypass -File tests/run_checks.ps1
 
 已有项目在继续处理前必须先通过一次集中校验。校验失败会按字段路径一次性列出需要修正的问题；上游字段无效时，相关后续检查会标记为阻断，避免用补空值或逐条试错掩盖项目结构问题。
 
+处理一个已有视频时，可以按下面的顺序准备证据和审查草稿（路径按实际项目替换）：
+
+```powershell
+python ai-storyboard-previs/scripts/prepare_imported.py preflight --script SCRIPT.md --video INPUT.mp4 --asset CHARACTER.png --asset SCENE.png
+python ai-storyboard-previs/scripts/prepare_imported.py run PROJECT.json G01 INPUT.mp4 EVIDENCE_DIR --run-dir PREPARE_INTERNAL_DIR
+python ai-storyboard-previs/scripts/review_draft.py prepare PROJECT.json G01 GROUP_REVIEW.json
+# 根据实际画面填写 GROUP_REVIEW.json 后再检查
+python ai-storyboard-previs/scripts/review_draft.py check PROJECT.json GROUP_REVIEW.json
+# 视觉审查完成后才正式登记
+python ai-storyboard-previs/scripts/previs.py review PROJECT.json GROUP_REVIEW.json
+```
+
+`preflight` 只确认脚本、视频和资产路径可读；`run` 串行完成集中校验、视频登记、基线冻结和稀疏抽帧，并在内部目录保存准备报告。`review_draft.py` 的 `prepare` 和 `check` 都是证据绑定的准备/诊断步骤，不替代人工或视频理解审查，也不代表已经通过。
+
+只有存在多个相互独立的事件、并且分派与协调成本确实值得时，才使用最多两个并行审查任务。并行流程中的 `resolutions` 会为被修改或丢弃的 worker 结论生成待填写的处理记录；理由补齐并完成最终检查后，才由唯一写回步骤提交。它是可选的内部提速路径，不承诺固定加速比例：
+
+```powershell
+python ai-storyboard-previs/scripts/parallel_review.py prepare PROJECT.json G01 UNITS.json REVIEW_BUNDLE
+python ai-storyboard-previs/scripts/parallel_review.py assemble PROJECT.json REVIEW_BUNDLE FINAL_REVIEW.json
+python ai-storyboard-previs/scripts/parallel_review.py resolutions PROJECT.json REVIEW_BUNDLE FINAL_REVIEW.json COORDINATOR_AUDIT.json UPDATED_AUDIT.json
+python ai-storyboard-previs/scripts/review_draft.py check PROJECT.json FINAL_REVIEW.json
+python ai-storyboard-previs/scripts/parallel_review.py commit PROJECT.json REVIEW_BUNDLE FINAL_REVIEW.json UPDATED_AUDIT.json
+```
+
 审查登记后可使用统一收尾入口（`PROJECT.json`、`PROFILE.json` 和目录名按实际项目替换）：
 
 ```powershell
@@ -134,11 +162,15 @@ requirements-dev.txt   开发与测试依赖
 主要实现文件还包括：
 
 - `ai-storyboard-previs/references/repair-assessments.md`：首轮审查需要填写的返修证据字段。
-- `ai-storyboard-previs/references/efficiency.md`：统一收尾、双任务审查和耗时记录的边界。
+- `ai-storyboard-previs/references/efficiency.md`：统一准备、串行草稿审查、双任务审查和耗时记录的边界。
+- `ai-storyboard-previs/references/facts-and-planner.md`：需求来源、事实账本和规划字段的校验约定。
+- `ai-storyboard-previs/references/shot-requirements.md`：逐镜要求、来源证据和状态字段的约定。
 - `ai-storyboard-previs/scripts/finish_review.py`：审查后的串行收尾与交付校验。
+- `ai-storyboard-previs/scripts/prepare_imported.py`：已有视频的路径预检、集中准备和稀疏证据入口。
+- `ai-storyboard-previs/scripts/review_draft.py`：证据绑定审查草稿的生成与只读批量检查。
 - `ai-storyboard-previs/scripts/parallel_review.py`：最多两个只读审查任务的冻结、收集和唯一写回。
 - `ai-storyboard-previs/scripts/review_timing.py`：记录阶段区间并按重叠区间合并统计。
 
 仓库不提交用户资产、实际视频、抽帧结果、缓存、私密配置、二进制媒体工具或历史演示产物；这些路径已写入 `.gitignore`。测试所需的脚本夹具保留在 `tests/fixtures/`。
 
-单条视频完成统一匹配后，可按完整连续事件分配最多两个只读审查任务，主流程复核状态边界和有限争议后统一写回；短任务自动选用串行路径。实现与验证边界见 [双任务审查](ai-storyboard-previs/references/parallel-review.md)。并行不改变最终两表交付或付费安全，也不代表已测得固定加速比例。
+单条视频完成统一匹配后，默认按串行路径审查；只有独立事件的审查工作量足以覆盖分派和协调成本时，才可按完整连续事件分配最多两个只读审查任务，主流程复核状态边界和有限争议后统一写回。没有固定镜数或时长门槛，是否并行由任务结构决定。实现与验证边界见 [双任务审查](ai-storyboard-previs/references/parallel-review.md)。并行不改变最终两表交付或付费安全，也不代表已测得固定加速比例。

@@ -4,7 +4,7 @@
 
 ## 何时启用与如何分工
 
-在已有视频完成整组匹配后，若有两个以上可独立审查的连续事件，并且运行环境提供审查子代理，则默认启用。只有一个紧密事件、旧项目缺事件字段、任务太小或无法使用子代理时，继续原来的串行组级审查。不要为了并行把一个连续事件切成两半。多来源视频逐份处理，第一版不同时建立多个写回中的来源审查。
+默认串行组级审查，短片和紧密连续事件优先串行。在已有视频完成整组匹配后，只有多个完整事件可独立核对、视觉工作量足够，并且预计收益高于分发、草稿整理、边界复核和协调成本时，才在环境允许时启用最多两个审查任务。同批说明分流理由，不额外发起模型调用；旧项目缺事件字段、任务太小或无法使用子代理时继续串行。不要为了并行把一个连续事件切成两半。多来源视频逐份处理，第一版不同时建立多个写回中的来源审查。
 
 在原有整理/匹配批次中给出 units，不额外逐镜询问。每个 unit 必须覆盖连续镜号，可将多个自然承接的小事件合为一个 unit。每个已有脚本审查组都完整覆盖；短组可合批。相邻相同 event.id 不得分给不同 unit；event 标签不同仍可能是同一连续行动，需先通读剧情合批。不能按固定镜数、秒数、最终 15 秒聚合组机械拆任务。
 
@@ -40,6 +40,8 @@ draft.json 字段：task_id、bundle_fingerprint，及原格式的 shot_reviews�
 
 ## 收集、有限复核、唯一写回点
 
+prepare 已在各任务目录生成 draft.json：预填当前选帧的精确时间、路径、哈希和镜号，判定保持 uncertain、观察与理由留空；已确认 absent 沿用映射且不填本镜帧。任务在此骨架上填写实际观察、判定及必要附加证据，不把预填引用当作已看过图片。context/worklist 同时保留 requirements_provenance，审查前对照原句核对硬要求，不能把上下文推断误作原文指定的同框构图。
+
 ```text
 python scripts/parallel_review.py assemble PROJECT.json REVIEW_BUNDLE COLLECTED.json --drafts-dir COORDINATOR_DIR
 ```
@@ -74,8 +76,17 @@ python scripts/parallel_review.py assemble PROJECT.json REVIEW_BUNDLE COLLECTED.
 
 boundaries/cross_references 严格按收集器清单填；边界 FAIL/uncertain 还需 affected_shot_ids，并落实到完整 review 的连续性和逐镜结论。accepted_shot_ids 表示直接保留的非边界问题结论；rechecked 是实际复核项；deferred 必须为未解决 uncertain，并写具体 followup。修改/移除任何 worker 记录或限制须在 resolutions 引用该原记录的 previs.digest 值，解释新证据；禁止合并时静默丢掉问题。原始两个草稿保留，不覆盖。结构校验不代替真实视觉核对。
 
+修改最终结论后，自动生成差异解释清单，避免手抄哈希：
+
 ```text
-python scripts/parallel_review.py commit PROJECT.json REVIEW_BUNDLE COORDINATOR_DIR/FINAL_REVIEW.json COORDINATOR_DIR/COORDINATOR_AUDIT.json
+python scripts/parallel_review.py resolutions PROJECT.json REVIEW_BUNDLE FINAL_REVIEW.json COORDINATOR_AUDIT.json UPDATED_AUDIT.json
+python scripts/review_draft.py check PROJECT.json FINAL_REVIEW.json
+```
+
+UPDATED_AUDIT.json 必须是新文件且位于冻结 bundle 外；它保留其他协调字段，逐条列出被修改或删除的原记录、字段位置和精确 record_hash，也包含被删除的限制。只复用同一原记录已有的理由，新增差异的 reason 留空，审查者须补写真实新证据和修改依据。未修改的记录不需要解释，空理由不能提交；输入过期或任务草稿变化则拒绝生成。使用填完的 UPDATED_AUDIT.json 执行下面的 commit。提交若仍缺解释，会一次列出所有缺失项；其他依赖与证据检查仍由原校验器负责。
+
+```text
+python scripts/parallel_review.py commit PROJECT.json REVIEW_BUNDLE FINAL_REVIEW.json UPDATED_AUDIT.json
 ```
 
 这是并行路径唯一项目写回点：重新核验全部依赖、草稿哈希、状态边界和复核上限，再调用现有 record_review 全量证据校验，持有项目 .lock 后原子保存。不要绕过为多次普通 review。验证失败保留草稿，集中修正所指问题后再提交。工具无预算修改或生成入口；所有生成/返修安全流程仍串行。

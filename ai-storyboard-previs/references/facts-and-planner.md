@@ -5,7 +5,7 @@
 
 代理从资产和原脚本提取有来源的事实，工具只计算结构化约束。不把抽取判断包装成数学确定性。
 
-默认一次 LLM 调用处理完整脚本与资产观察，输出所有镜头的 facts、state_changes、requirements（含块级 provenance）、event（初步自然段 id/summary/source）、duration/duration_source 及 narrative_plan（相邻承接与整段复杂度），不分别为各镜或各字段发起调用。代理仅写 requirements.entry_state 的新增种子、inherits_from 和有脚本授权的 state_changes；requirements.py 统一计算完整 entry_state/exit_state。后续生成、匹配和审查复用结果，不再次提取同一脚本。校验失败只修正指出的冲突，来源不明仍保留 unknown/inference，不能为了减少往返升级成事实。
+按 SKILL.md 的“一次整理完整输入”统一提取，后续复用，不逐镜或逐字段再次提取。输入类型、entity 允许范围及集中纠错以 [项目约定](project.md#一次校验与字段类型) 为准。来源不明仍保留 unknown/inference，不能为了减少往返升级成事实。
 
 每镜 facts 示例：
 
@@ -20,6 +20,8 @@ state_changes 保存 entity、attribute、before、after、critical、authorized
 intent 为 critical_result、narrative_turn、required_cut 三个布尔值。初始 omission_assessment 保留结构 allowed/risk/rationale/source，未判断时用 null/unknown 并说明未审查。审查后规划仅在副本里把当前 reference_assessments 转为补足约束，来源仍为 inference，不升级为脚本事实，也不修改原字段。最终省图走 planner.py --post-review；关键结果、关键状态变化、未知关键事实和锁定图受硬约束保护。
 
 ## 默认已有视频：审查后求解
+
+完整结构化输入在 previs.py validate（包括 prepare_imported.py run）时，已提前复用 planner.analyze 的状态账本检查，集中报告 baseline_conflict、change_start_conflict、unexplained_after_state。规划时仍保留原检查。facts 与持久状态可以使用同一属性名；合法 before/after 和授权 state_changes 应相互吻合。冲突要回查来源、阶段及变化，不改成 *_note、删除事实或清空状态来绕过。旧项目缺规划字段仍按原兼容规则处理，不能把未检查当作已通过。
 
 一次组级审查记录逐镜检验结果与推导依据，同组失败不影响其他镜头独立通过。已定位并通过或完整补查确认漏镜的非关键镜头，满足已通过前后保留锚点、资产支持及硬规则后可成为 ai_fill 候选；后者仍标视频漏镜，不能声称已通过。证据不足先补查，缺失镜头不能互作推导依据。
 

@@ -93,6 +93,11 @@ def prepare(project, gid, units, output):
     for task in tasks:
         worklist = task_worklist(bundle, task, output)
         core.save(output / task['id'] / 'worklist.json', worklist)
+        from review_draft import from_context
+        scaffold = from_context(ctx, task['shot_ids'])
+        core.save(output / task['id'] / 'draft.json', dict(
+            task_id=task['id'], bundle_fingerprint=bundle['fingerprint'], limitations=[],
+            **{key: scaffold.get(key, []) for key in ROWS if key != 'repair_assessments'}))
         owned = set(task['shot_ids'])
         ids = [s['shot_id'] for s in ctx['shots']]
         neighbors = {ids[j] for i, sid in enumerate(ids) if sid in owned
@@ -227,6 +232,44 @@ def assemble(project, directory, output, drafts_dir=None):
     return result
 
 
+def changed_records(collected, final):
+    """Multiset difference preserves duplicate findings and exact source digests."""
+    changes = []
+    for field in (*ROWS, 'coverage.limitations'):
+        original = (collected['review']['coverage']['limitations'] if field == 'coverage.limitations'
+                    else collected['review'].get(field, []))
+        current = (final['coverage']['limitations'] if field == 'coverage.limitations'
+                   else final.get(field, []))
+        remaining = [core.digest(row) for row in current]
+        for index, row in enumerate(original):
+            key = core.digest(row)
+            if key in remaining:
+                remaining.remove(key)
+            else:
+                changes.append(dict(field=field, index=index, record_hash=key,
+                                    original=copy.deepcopy(row), reason=''))
+    return changes
+
+
+def resolutions(project, directory, review_file, audit_file, output):
+    """Write a new audit draft with exact pending resolution references, no approval."""
+    core.require(not Path(output).exists(), 'use a new audit file; preserve existing coordination')
+    core.require(not Path(output).resolve().is_relative_to(Path(directory).resolve()),
+                 'audit output must be outside frozen bundle')
+    with evidence_operation():
+        _, b, collected = collect(project, directory)
+        final, audit = core.read(review_file), core.read(audit_file)
+        core.require(all(final.get(k) == b['context'][k] for k in
+                         ('group_id', 'version', 'video_sha256', 'context_fingerprint')),
+                     'final review must use the frozen group context')
+        core.require(audit.get('task_hashes') == collected['task_hashes'], 'task drafts changed after coordination')
+        previous = {r['record_hash']: r for r in audit.get('resolutions', [])}
+        audit['resolutions'] = [dict(row, reason=previous.get(row['record_hash'], {}).get('reason', ''))
+                                for row in changed_records(collected, final)]
+    core.save(output, audit)
+    return audit
+
+
 def audit_final(b, collected, final, audit):
     for field in ('group_id', 'version', 'video_sha256', 'context_fingerprint'):
         core.require(final.get(field) == b['context'][field], 'final review must use the frozen group context')
@@ -281,17 +324,9 @@ def audit_final(b, collected, final, audit):
     resolutions = audit.get('resolutions', [])
     acknowledged = {r.get('record_hash') for r in resolutions
                     if isinstance(r.get('reason'), str) and r['reason'].strip()}
-    for field in ROWS:
-        remaining = [core.digest(r) for r in final.get(field, [])]
-        for record in collected['review'].get(field, []):
-            key = core.digest(record)
-            if key in remaining:
-                remaining.remove(key)
-            else:
-                core.require(key in acknowledged, 'worker finding changed/dropped without resolution')
-    for limitation in collected['review']['coverage']['limitations']:
-        core.require(limitation in final['coverage']['limitations'] or core.digest(limitation) in acknowledged,
-                     'worker limitation dropped without resolution')
+    missing = [row for row in changed_records(collected, final) if row['record_hash'] not in acknowledged]
+    core.require(not missing, 'worker finding changed/dropped without resolution:\n' + '\n'.join(
+        f"{row['field']}[{row['index']}]: {row['record_hash']}" for row in missing))
 
 
 def commit(project, directory, review_file, audit_file):
@@ -319,6 +354,9 @@ def main():
     p.add_argument('--drafts-dir', help='Create new coordinator templates; never auto-approve')
     p = sub.add_parser('commit')
     p.add_argument('project'); p.add_argument('bundle'); p.add_argument('review'); p.add_argument('audit')
+    p = sub.add_parser('resolutions')
+    for name in ('project', 'bundle', 'review', 'audit', 'output'):
+        p.add_argument(name)
     a = parser.parse_args()
     if a.command == 'prepare':
         result = prepare(a.project, a.group, core.read(a.units), a.output)
@@ -326,6 +364,9 @@ def main():
     elif a.command == 'assemble':
         assemble(a.project, a.bundle, a.output, a.drafts_dir)
         print('draft only; coordinator review required')
+    elif a.command == 'resolutions':
+        result = resolutions(a.project, a.bundle, a.review, a.audit, a.output)
+        print('resolution draft only;', sum(not r['reason'].strip() for r in result['resolutions']), 'reasons required')
     else:
         result = commit(a.project, a.bundle, a.review, a.audit)
         print(result['verdict'])

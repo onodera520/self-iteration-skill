@@ -4,7 +4,9 @@
 
 ## 一次校验与字段类型
 
-整理完成后、登记视频和抽帧前，只运行一次 `previs.py validate 项目.json`。同一调用先检查对象、数组、必填字段与编号，再检查状态继承、来源及剧情分组；一次汇总当前能可靠判断的独立错误，按字段路径集中修正。不要逐镜运行 validate，也不要在完整校验前另开一轮 LLM 预检。校验不修改项目；错误返回非零退出码，不能进入写回或后续任务。
+填写项目之前先运行 `prepare_imported.py preflight --script 原脚本 --video 原视频 --asset 图1 --asset 图2`（每张原资产重复一个 --asset，保持顺序）。它一次列出缺失、空文件或不可读路径，不解码、不做语义判断，也不提供可跳过后续 SHA256 的凭据。路径失效先从用户指定目录定位真实文件并核对来源，不按文件名自动替换。
+
+整理完成后使用 `prepare_imported.py run PROJECT.json G01 INPUT.mp4 EVIDENCE_DIR --run-dir PREPARE_INTERNAL_DIR`。入口先统一校验，再登记视频、冻结 baseline、稀疏抽帧；无需事先重复执行独立 validate。同次校验先检查对象、数组、必填字段与编号，再检查状态继承、来源及剧情分组；一次汇总当前能可靠判断的独立错误，按字段路径集中修正。不要逐镜校验，也不要另开一轮 LLM 字段预检。单独诊断仍可用 `previs.py validate`；错误返回非零退出码。
 
 复用上一次任务留下的旧项目时，先运行 `previs.py validate`：通过才可沿用；未通过时，把本次输出的完整 ERROR 列表当作一次性修正清单，一次改完再重跑，或在本次输入可用时直接重建项目。禁止在未通过校验的旧项目上边跑边逐条试错（每发现一个 ERROR 才改一处），也禁止清空字段补空状态来绕过校验。
 
@@ -15,11 +17,16 @@
 | 字段 | JSON 类型与约定 |
 | --- | --- |
 | facts / state_changes | 对象数组；facts 非空，state_changes 无变化用 `[]`，不是字符串 |
+| facts[].entity / state_changes[].entity | 必须逐字匹配 `assets[].id`，不是 description、镜号、event.id 或随意命名的剧情实体；attribute 是非空字符串 |
 | requirements.entry_state / keyframe.state | 对象；无新增入口种子用 `{}`；不手写 exit_state |
 | requirements.must_have / must_not_have | 字符串数组，例如 `["男孩接住钥匙"]` |
 | requirements.provenance | 来源对象数组；每个要求块一条来源 |
 | event / duration_source / narrative_plan | 对象，完整格式见默认模板 |
 | repair_asset_style.assets[].visible_style_facts | 非空字符串数组，不能把整个列表写成一段字符串 |
+
+先固定资产 ID 清单，再写所有镜头的 entity。属性属于谁就引用谁（例如人物的缺氧状态引用该人物 ID）；不存在对应资产的剧情要求保留在有来源的 requirements 描述与必要画面要求中，不硬套无关角色、不伪造资产、不丢弃剧情要求。当前版本不支持独立 story_entities，不能靠新增同名字段绕过约束。
+
+准备入口持有同一 `.lock`，任一步失败立即停止，成功保存的前序阶段保留。它显式拦截 missing_assets，并重新核对全部资产文件；首轮还没有抽帧时 missing_anchors 是预期情况，不当作已通过画面。EVIDENCE_DIR 和 PREPARE_INTERNAL_DIR 必须是互不嵌套的新目录。内部 PREPARE_REPORT.json 记录失败阶段和机械耗时；失败后先修正原因，再换新目录重跑，当前视频路径、版本、组指纹及哈希仍一致才复用已有登记，baseline 不可改写。此入口不执行匹配、审查、生成或付费，也不改变脚本和采样策略。
 
 `repair_asset_style` 是看过真实资产后填写的准备数据，基础模板不伪造 SHA256。仅校对的旧项目可省略；一旦填写就提前检查格式，进入返修提示词前仍须检查完整资产覆盖及当前哈希。精确片段如下（sha256 必须替换为工具实测值）：
 

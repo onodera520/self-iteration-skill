@@ -164,6 +164,28 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             planner.validate_facts(self.p)
 
+    def test_ledger_conflicts_reported_early_together(self):
+        # Facts omitted from entry_state used to escape validation until planning.
+        for i, shot in enumerate(self.p['shots']):
+            for attr in ('test_position', 'test_wetness'):
+                shot['facts'].append(dict(entity='girl', attribute=attr, value=i,
+                    status='known', phase='static', critical=True,
+                    source=dict(kind='script', ref='SIMULATED source conflict')))
+        before = copy.deepcopy(self.p)
+        result = self.errors()
+        ledger = [r for r in result.errors if r['path'].endswith('.facts/state_changes')]
+        self.assertEqual(len(ledger), 4)
+        self.assertEqual(self.p, before)
+
+    def test_shared_fact_state_key_and_inference_are_not_conflicts(self):
+        # Template legitimately uses key.holder both as a fact and a state key.
+        core.validate(self.p, self.template)
+        for i, shot in enumerate(self.p['shots']):
+            shot['facts'].append(dict(entity='girl', attribute='inferred_position', value=i,
+                status='known', phase='static', critical=True,
+                source=dict(kind='inference', ref='SIMULATED assumption')))
+        core.validate(self.p, self.template)
+
 
 if __name__ == '__main__':
     unittest.main()

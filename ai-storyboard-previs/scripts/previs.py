@@ -160,7 +160,7 @@ def validate(p, project_path):
     style_shape(p, report)
     from requirements import contexts
     from grouping import validate_metadata
-    from planner import validate_facts
+    from planner import validate_facts, validate_ledger
     if valid_collections['shots'] and valid_collections['assets']:
         validate_facts(p, report=report, present_only=True)
     else:
@@ -168,6 +168,8 @@ def validate(p, project_path):
     if valid_collections['shots']:
         contexts(p, report=report)
         validate_metadata(p, report=report)
+        if valid_collections['assets']:
+            validate_ledger(p, report)
     else:
         report.block('shots', 'invalid shot IDs/objects; cannot resolve states or narrative metadata')
     # No file checks, partial success, or mutation until all in-memory checks pass.
@@ -314,6 +316,7 @@ def video_context(p, project_path, gid):
              "requirements": resolved.get(s["id"]), "selected_frame": current_frame(p, project_path, s["id"])} for s in shots(p, g)]
     for row, s in zip(rows, shots(p, g)):
         row.update(planned_duration=s.get("duration"), duration_source=copy.deepcopy(s.get("duration_source")))
+        row['requirements_provenance'] = copy.deepcopy((s.get('requirements') or {}).get('provenance', []))
         if "event" in s:
             row.update(event=copy.deepcopy(s["event"]), scene_id=s["scene_id"], continuity_id=s["continuity_id"])
     used_assets = {aid for s in shots(p, g) for aid in s["asset_ids"]}
