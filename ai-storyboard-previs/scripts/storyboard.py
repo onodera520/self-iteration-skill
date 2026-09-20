@@ -413,6 +413,11 @@ def seconds(value, suggested=False):
     return format(Decimal(str(value)).normalize(), 'f') + " 秒" + ("（建议）" if suggested else "")
 
 
+def text_only_fill(decision):
+    """Only confirmed missing fills omit the delivery image; present fills stay visible."""
+    return decision.get("mode") == "ai_fill" and decision.get("mapping_status") == "absent"
+
+
 @verified_read
 def render_aggregation(p, project, out):
     from planner import current_aggregation
@@ -422,8 +427,6 @@ def render_aggregation(p, project, out):
     chosen = {}
     for s in p["shots"]:
         sid = s["id"]
-        if decisions.get(sid, {}).get("mode") == "ai_fill":
-            continue
         if decisions.get(sid, {}).get("mapping_status") == "absent":
             continue
         item = current_frame(p, project, sid)
@@ -448,7 +451,7 @@ def render_aggregation(p, project, out):
     names = {sid: "images/" + sid + "-" + item["sha256"][:12] + Path(item["path"]).suffix.lower()
              for sid, (item, _) in chosen.items()}
     thumbnails = {s["id"]: "images/thumb-" + s["id"] + "-" + digest([decisions.get(s["id"]), chosen.get(s["id"])])[:12] + ".png"
-                  for s in p["shots"] if decisions.get(s["id"], {}).get("mode") != "ai_fill"}
+                  for s in p["shots"] if not text_only_fill(decisions.get(s["id"], {}))}
     expected = {"分镜说明.md", *names.values(), *thumbnails.values()}
     require(not out.exists() or all(f.relative_to(out).as_posix() in expected for f in out.rglob("*") if f.is_file()),
             "choose a new delivery folder to preserve previous files and exclude internal records")
@@ -459,7 +462,7 @@ def render_aggregation(p, project, out):
             text = text.replace(char, "\\" + char)
         return " ".join(text.splitlines())
     lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜。", "",
-             "“可推导生成”仅表示建议省去独立参考图，脚本镜头仍保留；不表示已生成或已验证。", ""]
+             "已有镜头即使建议省图仍展示抽帧；仅确认漏镜且批准省图时显示“可推导生成”。省图为建议，未验证，脚本镜头仍保留。", ""]
     if p.get("config", {}).get("video_source") == "imported":
         lines += ["时长采用脚本计划值，每组不超过15秒；建议值单独标注。对白不作逐字或口型同步检查。", ""]
     if not proposal:
@@ -513,7 +516,7 @@ def render_aggregation(p, project, out):
                 dest.parent.mkdir(exist_ok=True)
                 if source != dest:
                     shutil.copy2(source, dest)
-            if decision.get("mode") == "ai_fill":
+            if text_only_fill(decision):
                 picture = "可推导生成"
             else:
                 thumb = out / thumbnails[sid]

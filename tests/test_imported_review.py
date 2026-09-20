@@ -132,12 +132,12 @@ class ImportedReviewTests(fixtures.Base):
         self.assertIn('| 镜头时长 |',text)
         self.assertNotIn('视频结论',text)
         self.assertIn('| 检验通过 | 建议省图，未验证 | S01 + S03 |',text)
-        self.assertEqual(len(list(out.rglob('*.png'))),4)
+        self.assertEqual(len(list(out.rglob('*.png'))),6)
         row=next(l for l in text.splitlines() if '| S02 |' in l)
-        self.assertIn('| 可推导生成 |',row)
-        self.assertNotIn('![',row)
-        self.assertFalse(list(out.glob('images/*S02*')))
-        for sid in ('S01','S03'):
+        self.assertNotIn('| 可推导生成 |',row)
+        self.assertIn('![',row)
+        self.assertTrue(list(out.glob('images/S02-*')))
+        for sid in ('S01','S02','S03'):
             thumb = next(out.glob('images/thumb-'+sid+'-*.png'))
             self.assertIn(thumb.name,text)
             with Image.open(thumb) as im:

@@ -16,6 +16,7 @@ from repair_readiness import diagnose
 
 def validate_delivery(p, stage):
     """Check immutable bytes, two tables, exact shot order, thumbnails and omission."""
+    from storyboard import text_only_fill
     record = p['repair_deliveries'][stage]
     md = Path(record['path']).resolve()
     core.require(record['aggregation_fingerprint'] == core.digest(p['aggregation']), 'Delivery aggregation stale')
@@ -30,11 +31,11 @@ def validate_delivery(p, stage):
     pictures = 0
     for row in rows:
         sid, picture = row[1].strip(), row[4].strip()
-        if decisions[sid]['mode'] == 'ai_fill':
-            core.require(picture == '可推导生成', 'ai_fill must not create an image/link')
+        if text_only_fill(decisions[sid]):
+            core.require(picture == '可推导生成', 'Absent ai_fill must not create an image/link')
             continue
         links = re.findall(r'\]\(<([^>]+)>\)', picture)
-        core.require(links, 'Non-fill shot needs a local thumbnail')
+        core.require(links, 'Present or non-fill shot needs a local thumbnail')
         for i, link in enumerate(links):
             image = (md.parent / link).resolve()
             core.require(image.is_relative_to(md.parent) and str(image) in record['files'], 'Image outside immutable delivery')

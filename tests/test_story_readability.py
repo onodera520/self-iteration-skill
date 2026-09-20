@@ -66,9 +66,10 @@ class StoryReadabilityTests(fixtures.Base):
         self.assertEqual(self.p['shots'], before)
         document = Path(boards.render(self.p, self.path, self.path.parent/'delivery')).read_text(encoding='utf8')
         row = next(line for line in document.splitlines() if '| S04 |' in line)
-        self.assertIn('| 可推导生成 | 检验通过 | 建议省图，未验证 | S03 + S05 |', row)
-        self.assertNotIn('![', row)
-        self.assertFalse(list((self.path.parent/'delivery').rglob('*S04*.png')))
+        self.assertNotIn('| 可推导生成 |', row)
+        self.assertIn('| 检验通过 | 建议省图，未验证 | S03 + S05 |', row)
+        self.assertIn('![', row)
+        self.assertTrue(list((self.path.parent/'delivery').glob('images/*S04*.png')))
         self.assertIsNotNone(boards.current_mapping(self.p, self.path, 'G01'))
 
     def test_missing_performance_detail_remains_absent_not_pass(self):
