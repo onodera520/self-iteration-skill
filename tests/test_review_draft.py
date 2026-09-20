@@ -6,6 +6,7 @@ import test_previs as fixtures
 import previs as core
 import review_draft
 import storyboard
+import test_repair_cycle as repair_fixtures
 from validation import ValidationError
 
 
@@ -149,6 +150,67 @@ class ReviewDraftTests(fixtures.Base):
         core.resolve(self.path, review['evidence'][0]['path']).write_bytes(b'changed frame')
         with self.assertRaises(ValueError):
             review_draft.check(self.path, review)
+
+    def test_worklist_fills_semantics_without_changing_bindings(self):
+        self.mapping()
+        core.save(self.path, self.p)
+        draft = review_draft.prepare(self.path, 'G01', self.path.parent / 'draft.json',
+                                     self.path.parent / 'context.json', self.path.parent / 'worklist.json')
+        edits = core.read(self.path.parent / 'worklist.json')
+        self.assertEqual(review_draft.fill(draft, edits), draft)
+        self.assertTrue(all(s['repair']['critical'] is None for s in edits['shots'].values()))
+        good = self.review_data()
+        for row in good['shot_reviews']:
+            sid = row['shot_id']
+            for k in edits['shots'][sid]['review']:
+                edits['shots'][sid]['review'][k] = row.get(k, '')
+        for row in good['reference_assessments']:
+            for k in edits['shots'][row['shot_id']]['reference']:
+                edits['shots'][row['shot_id']]['reference'][k] = row[k]
+        for row, approved in zip(edits['evidence'], good['evidence']):
+            for k in ('observation', 'visible_facts', 'interpretation'):
+                row[k] = approved[k]
+        for k in edits['group']:
+            edits['group'][k] = good['coverage'][k] if k in ('mapping_verified', 'limitations') else good[k]
+        before = self.path.read_bytes()
+        result = review_draft.fill(draft, edits)
+        self.assertTrue(review_draft.check(self.path, result)['valid'])
+        self.assertEqual(self.path.read_bytes(), before)
+        for a, b in zip(result['evidence'], draft['evidence']):
+            self.assertEqual({k: a[k] for k in ('path', 'sha256', 'time')},
+                             {k: b[k] for k in ('path', 'sha256', 'time')})
+        bad = copy.deepcopy(edits)
+        bad['evidence'][0]['time'] += .01
+        with self.assertRaisesRegex(ValueError, 'bindings changed'):
+            review_draft.fill(draft, bad)
+        bad = copy.deepcopy(edits)
+        bad['shots']['S01']['review']['shot_id'] = 'S02'
+        with self.assertRaisesRegex(ValueError, 'mechanical fields'):
+            review_draft.fill(draft, bad)
+        draft['context_fingerprint'] = 'new context'
+        with self.assertRaisesRegex(ValueError, 'stale worklist'):
+            review_draft.fill(draft, edits)
+
+    def test_all_missing_repair_fields_reported_before_registration(self):
+        self.prepare()
+        good = repair_fixtures.RepairCycleTests.assessment(self, self.review_data({'S01': 'FAIL', 'S02': 'FAIL'}))
+        self.assertTrue(review_draft.check(self.path, good)['valid'])
+        before = self.path.read_bytes()
+        bad = copy.deepcopy(good)
+        bad['repair_assessments'] = [dict(shot_id=sid) for sid in ('S01', 'S02')]
+        with self.assertRaises(ValidationError) as caught:
+            review_draft.check(self.path, bad)
+        paths = {r['path'] for r in caught.exception.errors}
+        for sid in ('S01', 'S02'):
+            for field in ('critical', 'affects_story', 'script_quote', 'issue_ids', 'impact', 'correction', 'preserves_script'):
+                self.assertIn(f'repair_assessments[{sid}].{field}', paths)
+        legacy = copy.deepcopy(good)
+        del legacy['repair_assessments']
+        with self.assertRaises(ValidationError):
+            review_draft.check(self.path, legacy)
+        self.assertTrue(review_draft.check(self.path, legacy, delivery_only=True)['valid'])
+        self.assertFalse(review_draft.check(self.path, legacy, delivery_only=True)['repair_readiness_checked'])
+        self.assertEqual(self.path.read_bytes(), before)
 
 
 if __name__ == '__main__':

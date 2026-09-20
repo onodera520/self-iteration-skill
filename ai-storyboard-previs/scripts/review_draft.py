@@ -53,17 +53,80 @@ def from_context(ctx, shot_ids=None):
                 checks={k: 'uncertain' for k in ('shot', 'continuity', 'story')},
                 grouping_checked=False, coverage=dict(shot_ids=list(ids), mapping_verified=False, limitations=[]),
                 shot_reviews=rows, reference_assessments=references, evidence=evidence,
-                issues=[], uncertainties=[], asset_comparisons=[],
+                issues=[], uncertainties=[], asset_comparisons=[], repair_assessments=[],
                 boundary_checks=[dict(shot_id=b['shot_id'], verdict='uncertain', observation='')
                                  for b in ctx['boundaries']])
 
 
-def prepare(project, gid, output, context_output=None):
+def worklist(draft):
+    """Editable semantic fields, keyed by shot ID; evidence bindings stay in the draft."""
+    result = dict(base_digest=core.digest(draft), shots={}, evidence=[], group={})
+    references = {r['shot_id']: r for r in draft['reference_assessments']}
+    assessments = {r['shot_id']: r for r in draft.get('repair_assessments', [])}
+    for row in draft['shot_reviews']:
+        sid = row['shot_id']
+        result['shots'][sid] = dict(
+            review={k: copy.deepcopy(v) for k, v in row.items() if k not in ('shot_id', 'evidence_times')},
+            reference={k: copy.deepcopy(v) for k, v in references[sid].items() if k not in ('shot_id', 'evidence_times')},
+            repair=copy.deepcopy(assessments.get(sid)) or dict(
+                critical=None, critical_kind=None, affects_story=None, script_quote='', issue_ids=[],
+                impact='', correction='', preserves_script=None))
+        result['shots'][sid]['repair'].pop('shot_id', None)
+    result['evidence'] = [{k: copy.deepcopy(e[k]) for k in
+                          ('shot_id', 'sha256', 'time', 'observation', 'visible_facts', 'interpretation')}
+                         for e in draft['evidence']]
+    result['group'] = {k: copy.deepcopy(draft[k]) for k in
+                       ('checks', 'grouping_checked', 'issues', 'uncertainties', 'asset_comparisons', 'boundary_checks')}
+    result['group']['mapping_verified'] = draft['coverage']['mapping_verified']
+    result['group']['limitations'] = copy.deepcopy(draft['coverage']['limitations'])
+    return result
+
+
+def fill(draft, edits):
+    """Merge an explicit worklist, never rebind timestamps, hashes, or context."""
+    core.require(edits.get('base_digest') == core.digest(draft), 'stale worklist; use the exact source draft')
+    expected = worklist(draft)
+    core.require(set(edits) == set(expected) and set(edits['shots']) == set(expected['shots']), 'worklist must cover exact shot IDs')
+    result = copy.deepcopy(draft)
+    result['repair_assessments'] = []
+    references = {r['shot_id']: r for r in result['reference_assessments']}
+    for row in result['shot_reviews']:
+        sid = row['shot_id']
+        reference = references[sid]
+        values = edits['shots'][sid]
+        core.require(set(values) == set(expected['shots'][sid]), 'unexpected shot fields: ' + sid)
+        for name, target in (('review', row), ('reference', reference)):
+            core.require(set(values[name]) == set(expected['shots'][sid][name]), 'mechanical fields cannot be edited: ' + sid)
+            target.update(copy.deepcopy(values[name]))
+        core.require(set(values['repair']) == set(expected['shots'][sid]['repair']), 'unexpected repair fields: ' + sid)
+        if row['verdict'] in ('FAIL', 'absent'):
+            result['repair_assessments'].append(dict(shot_id=sid, **copy.deepcopy(values['repair'])))
+        else:
+            core.require(values['repair'] == expected['shots'][sid]['repair'] and
+                         sid not in {a['shot_id'] for a in draft.get('repair_assessments', [])},
+                         'non-problem shot must not carry a repair assessment: ' + sid)
+    key = lambda e: (e['shot_id'], e['sha256'], e['time'])
+    original = {key(e): e for e in result['evidence']}
+    core.require(len(edits['evidence']) == len(original) and {key(e) for e in edits['evidence']} == set(original),
+                 'evidence bindings changed; rebuild draft from actual evidence')
+    for row in edits['evidence']:
+        core.require(set(row) == {'shot_id', 'sha256', 'time', 'observation', 'visible_facts', 'interpretation'}, 'unexpected evidence fields')
+        original[key(row)].update({k: copy.deepcopy(row[k]) for k in ('observation', 'visible_facts', 'interpretation')})
+    core.require(set(edits['group']) == set(expected['group']), 'unexpected group fields')
+    for k, v in edits['group'].items():
+        (result['coverage'] if k in ('mapping_verified', 'limitations') else result)[k] = copy.deepcopy(v)
+    return result
+
+
+def prepare(project, gid, output, context_output=None, worklist_output=None):
     output = Path(output).resolve()
     core.require(not output.exists(), 'use a new draft file; existing judgments must not be overwritten')
     if context_output is not None:
         context_output = Path(context_output).resolve()
         core.require(context_output != output and not context_output.exists(), 'use a distinct new context file')
+    if worklist_output is not None:
+        worklist_output = Path(worklist_output).resolve()
+        core.require(worklist_output not in (output, context_output) and not worklist_output.exists(), 'use a distinct new worklist file')
     with evidence_operation():
         p = core.read(project)
         core.validate(p, project)
@@ -76,10 +139,12 @@ def prepare(project, gid, output, context_output=None):
     core.save(output, draft)
     if context_output is not None:
         core.save(context_output, ctx)
+    if worklist_output is not None:
+        core.save(worklist_output, worklist(draft))
     return draft
 
 
-def check(project, review):
+def check(project, review, delivery_only=False):
     """Collect independent mechanical mistakes, then retain the full original gate."""
     report = Report()
     with evidence_operation():
@@ -129,13 +194,17 @@ def check(project, review):
                              path + '.checks', 'all per-shot checks required')
             if row.get('verdict') == 'uncertain':
                 report.check(text(row.get('followup')), path + '.followup', 'concrete evidence followup required')
+        if not delivery_only:
+            from repair_readiness import diagnose
+            diagnose(p, review, report)
         # Run on a copy: even a valid draft must not register a review in this command.
         try:
             core.record_review(copy.deepcopy(p), project, copy.deepcopy(review))
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             report.check(False, '$.full_review', str(exc))
         report.finish()
-    return dict(valid=True, scope='structure_and_evidence_only', visual_quality_verified=False)
+    return dict(valid=True, scope='structure_and_evidence_only', visual_quality_verified=False,
+                repair_readiness_checked=not delivery_only)
 
 
 def main():
@@ -145,19 +214,31 @@ def main():
     for field in ('project', 'group', 'output'):
         sub.add_argument(field)
     sub.add_argument('--context-output', help='save the same full context without a second context operation')
+    sub.add_argument('--worklist-output', help='save editable semantic fields keyed by shot ID')
     sub = commands.add_parser('check')
     sub.add_argument('project'); sub.add_argument('review')
+    sub.add_argument('--delivery-only', action='store_true', help='legacy review only; not repair readiness')
+    sub = commands.add_parser('fill')
+    for field in ('project', 'draft', 'worklist', 'output'):
+        sub.add_argument(field)
     args = parser.parse_args()
     if args.command == 'prepare':
-        prepare(args.project, args.group, args.output, args.context_output)
+        prepare(args.project, args.group, args.output, args.context_output, args.worklist_output)
         print('draft only; verify frame notes and complete interpretations and judgments')
+    elif args.command == 'fill':
+        core.require(not Path(args.output).exists(), 'use a new completed draft file')
+        completed = fill(core.read(args.draft), core.read(args.worklist))
+        # Checking before writing also verifies live frame hashes and current context.
+        check(args.project, completed)
+        core.save(args.output, completed)
+        print('checked draft only; next: previs.py review PROJECT OUTPUT')
     else:
-        print(json.dumps(check(args.project, core.read(args.review))))
+        print(json.dumps(check(args.project, core.read(args.review), args.delivery_only)))
 
 
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, OSError, KeyError) as exc:
+    except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         sys.exit(1)
