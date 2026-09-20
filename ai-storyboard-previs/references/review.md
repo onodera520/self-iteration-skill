@@ -197,7 +197,7 @@ FAIL/absent 的 issues 必填 id、shot_ids、time_range、severity、problem、
 
 重选单镜帧：重看该镜及左右衔接，复用其他有效观察，以完整组结构重登记新指纹。替换整份视频：整份重新抽帧、匹配和审查，左右来源组只补查接壤边界并复用内部观察。脚本/资产/视频/依据图片/映射变更均使相关旧结论失效。previous_review 只供复用观察，不直接复制过期 PASS。
 
-证据不足先补查；仍无法确认则该项交付待检查，不计入自动返修错误。组级审查同时填写 [repair_assessments](auto-repair.md#首轮整理与审查)，不增加逐镜往返；关键问题须有原文和同镜证据。先完成原视频两表快照，再计算独立返修阈值；自动返修最多每份来源一次，新视频完整独立审查。公开模型旧生成模式仍按 [生成恢复规则](generation.md) 处理：确认 FAIL 才登记 repair，再改提示词或拆组；三轮上限、预算、提交数、max_retries=1、.lock、submission_unknown 查询原任务逻辑不变，uncertain 不触发付费重试。
+证据不足先补查；仍无法确认则该项交付待检查，不计入自动返修错误。组级审查同时填写 [repair_assessments](repair-assessments.md)，不增加逐镜往返；关键问题须有原文和同镜证据。先完成原视频两表快照，再计算独立返修阈值；自动返修最多每份来源一次，新视频完整独立审查。公开模型旧生成模式仍按 [生成恢复规则](generation.md) 处理：确认 FAIL 才登记 repair，再改提示词或拆组；三轮上限、预算、提交数、max_retries=1、.lock、submission_unknown 查询原任务逻辑不变，uncertain 不触发付费重试。
 
 ## 三镜验收与调用数
 

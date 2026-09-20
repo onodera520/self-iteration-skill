@@ -4,27 +4,7 @@
 
 ## 首轮整理与审查
 
-首次整理将 `shots[].script` 保存为该镜的原始脚本文本（含原标点、换行），不得摘要。`source_script` 保留完整输入；可选 `video_format_requirements` 是原文中全局格式要求的逐字摘录数组。执行 `repair_cycle.py baseline` 冻结基准。旧项目若只存摘要，须从原输入恢复并重建有效审查，不能以摘要冒充原文。基准冻结后发生真实脚本修订应创建独立项目版本，不能借机清除已占用的付费额度。
-
-在每份来源视频的组级审查中，增加 `repair_assessments`；每个确认 `FAIL` 或 `absent` 镜头恰有一条，无此类镜头时填空数组。PASS 和 uncertain 不填。示意（镜号、引文和证据须换为本案真实内容）：
-
-```json
-{
-  "shot_id": "S03",
-  "critical": true,
-  "critical_kind": "wrong_transfer_result",
-  "affects_story": true,
-  "script_quote": "钥匙交接完成，钥匙在乙手中。",
-  "issue_ids": ["I03"],
-  "impact": "画面中钥匙仍在甲手中，使交接结果相反。",
-  "correction": "本镜明确呈现乙接住钥匙，结束时钥匙留在乙手中；其他镜头遵循原文。",
-  "preserves_script": true
-}
-```
-
-`critical_kind` 仅用于关键问题，可取 missing_key_node / wrong_actor / broken_causality / wrong_transfer_result / explicit_key_requirement。不能只用“严重”“很重要”定级；必须引用本镜原文要求、同镜问题及有效证据。已定位错误引用本镜有效帧和实际时间；确认漏镜引用原有全片补查记录，不伪造本镜图片。工具检查引文、镜号、问题关联和字段完整性，不能证明视觉描述或修复语义真实。代理须确认补充仅恢复本镜原意，不添加事件、改变其他镜约束或资产编号。
-
-旧审查缺少这些字段仍可用于原有两表交付，但不能自动产生返修判定；利用有效事实一次补齐组级审查，不能自动猜测关键程度。不改变 review_schema=5 / reference_policy_version=5 的视觉规则；新增独立 repair policy=1 纳入返修绑定。
+首轮整理与组级审查只需阅读 [返修证据字段](repair-assessments.md)，保留原文基准、同镜证据和修复范围约束。达到判定条件且需要执行时再继续阅读本文件。
 
 ## 独立机读判定
 

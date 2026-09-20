@@ -18,6 +18,8 @@
 
 用户不需要手写项目 JSON。Skill 会在内部维护视频哈希、实测时长、抽帧证据、镜头映射和审查状态；这些内部数据不属于交付物。
 
+审查登记完成后，可以由统一收尾入口一次完成规划、保存不可覆盖的原视频 Markdown 与图片、生成返修判定并校验交付物。这个入口只整理已经完成的审查结果，不替代视觉判断，也不会自行提交付费任务。
+
 ## 怎么判断和分组
 
 视频来源组表示一段视频应该覆盖哪些连续脚本镜头，最终聚合组是审查后的展示和后续建议，两者不是同一个概念。省略一张独立参考图不会删除原镜头，组内仍保留原顺序。
@@ -112,6 +114,15 @@ powershell -ExecutionPolicy Bypass -File tests/run_checks.ps1
 
 已有项目在继续处理前必须先通过一次集中校验。校验失败会按字段路径一次性列出需要修正的问题；上游字段无效时，相关后续检查会标记为阻断，避免用补空值或逐条试错掩盖项目结构问题。
 
+审查登记后可使用统一收尾入口（`PROJECT.json`、`PROFILE.json` 和目录名按实际项目替换）：
+
+```powershell
+python ai-storyboard-previs/scripts/finish_review.py PROJECT.json PROFILE.json `
+  --output DELIVERY_DIR --run-dir FINISH_INTERNAL_DIR
+```
+
+`FINISH_INTERNAL_DIR` 必须是新的内部目录，并与交付目录分开；其中的 JSON 和计时报告只用于恢复、校验和调试。缺少返修判定所需证据时，入口会保留已经完成的原视频交付并报告阻断，不会把缺字段当成无需返修。
+
 ## 目录
 
 ```text
@@ -119,6 +130,14 @@ ai-storyboard-previs/  Skill 入口、规则、示例数据和工具脚本
 tests/                 行为测试、媒体测试和检查脚本
 requirements-dev.txt   开发与测试依赖
 ```
+
+主要实现文件还包括：
+
+- `ai-storyboard-previs/references/repair-assessments.md`：首轮审查需要填写的返修证据字段。
+- `ai-storyboard-previs/references/efficiency.md`：统一收尾、双任务审查和耗时记录的边界。
+- `ai-storyboard-previs/scripts/finish_review.py`：审查后的串行收尾与交付校验。
+- `ai-storyboard-previs/scripts/parallel_review.py`：最多两个只读审查任务的冻结、收集和唯一写回。
+- `ai-storyboard-previs/scripts/review_timing.py`：记录阶段区间并按重叠区间合并统计。
 
 仓库不提交用户资产、实际视频、抽帧结果、缓存、私密配置、二进制媒体工具或历史演示产物；这些路径已写入 `.gitignore`。测试所需的脚本夹具保留在 `tests/fixtures/`。
 

@@ -15,6 +15,33 @@ ROWS = ('shot_reviews', 'reference_assessments', 'evidence',
 MAX_DISPUTES = 4
 
 
+def task_worklist(bundle, task, directory):
+    """Derived reading view, never an alternative evidence source or a verdict."""
+    ctx = bundle['context']
+    ids = [s['shot_id'] for s in ctx['shots']]
+    owned = set(task['shot_ids'])
+    neighbors = {ids[j] for i, sid in enumerate(ids) if sid in owned
+                 for j in (i-1, i+1) if 0 <= j < len(ids) and ids[j] not in owned}
+    mapping = {r['shot_id']: r for r in ctx['mapping']['shots']}
+    def row(s):
+        sid = s['shot_id']
+        return dict(**copy.deepcopy(s), mapping=copy.deepcopy(mapping[sid]),
+                    state_changes=copy.deepcopy(bundle.get('state_changes', {}).get(sid, [])))
+    return dict(schema=1, task_id=task['id'], bundle_fingerprint=bundle['fingerprint'],
+                project_base=str(Path(bundle['project']).parent),
+                canonical_context=str(Path(directory).resolve() / 'bundle.json'),
+                source_script=bundle['source_script'], assets=ctx['assets'],
+                review_scope=ctx.get('review_scope'), narrative_plan=ctx.get('narrative_plan'),
+                owned_shots=[row(s) for s in ctx['shots'] if s['shot_id'] in owned],
+                neighbor_context=[row(s) for s in ctx['shots'] if s['shot_id'] in neighbors],
+                external_boundaries=ctx.get('boundaries', []),
+                pending_mapping_shot_ids=[sid for sid in task['shot_ids'] if mapping[sid]['status'] != 'matched'],
+                evidence_location='canonical_context.context.extraction (all frames and contact sheets)',
+                instruction='Read this view first. All owned candidates remain mandatory as needed for evidence. '
+                            'Use canonical_context for continuous frames, rescan coverage, and other-shot anchors. '
+                            'A compact view is not proof of absence or PASS; neighbors are context, not ownership.')
+
+
 def fingerprint(data):
     return core.digest({k: v for k, v in data.items() if k != 'fingerprint'})
 
@@ -57,12 +84,15 @@ def prepare(project, gid, units, output):
         tasks = schedule(ctx, units)
         bundle = dict(schema=1, project=str(project), project_sha256=core.sha(project),
                       context=ctx, source_script=p['source_script'], units=units, tasks=tasks,
+                      state_changes={s['id']: s.get('state_changes', []) for s in p['shots']},
                       max_workers=2, max_disputes=MAX_DISPUTES, draft_only=True,
                       mode='parallel' if len(tasks) == 2 else 'serial')
         bundle['fingerprint'] = fingerprint(bundle)
     output.mkdir(parents=True)
     core.save(output / 'bundle.json', bundle)
     for task in tasks:
+        worklist = task_worklist(bundle, task, output)
+        core.save(output / task['id'] / 'worklist.json', worklist)
         owned = set(task['shot_ids'])
         ids = [s['shot_id'] for s in ctx['shots']]
         neighbors = {ids[j] for i, sid in enumerate(ids) if sid in owned
@@ -70,9 +100,11 @@ def prepare(project, gid, units, output):
         core.save(output / task['id'] / 'task.json', dict(
             task_id=task['id'], bundle_fingerprint=bundle['fingerprint'],
             shared_context=str(output / 'bundle.json'), shot_ids=task['shot_ids'],
+            worklist=str(output / task['id'] / 'worklist.json'), worklist_sha256=core.sha(output / task['id'] / 'worklist.json'),
             neighbor_shot_ids=[sid for sid in ids if sid in neighbors],
             output=str(output / task['id'] / 'draft.json'), draft_only=True,
-            instruction='Read the full script and frozen state context. Review owned shots and their continuity; '
+            instruction='Read worklist.json first, verify its hash in task.json, then open full frozen evidence as needed. '
+                        'Read the full script and frozen state context. Review owned shots and their continuity; '
                         'neighbors are context only. Write only draft.json. Do not change shared files, '
                         'states or mappings, extract frames, approve final groups, call APIs or spawn agents.'))
     return bundle
@@ -88,6 +120,10 @@ def load_bundle(project, directory):
     ctx = core.video_context(p, project, b['context']['group_id'])
     core.require(ctx['context_fingerprint'] == b['context']['context_fingerprint'],
                  'evidence/context changed; prepare a fresh bundle')
+    if 'state_changes' in b:  # Legacy bundles remain readable; new derived views are verified.
+        for task in b['tasks']:
+            core.require(core.read(directory / task['id'] / 'worklist.json') == task_worklist(b, task, directory),
+                         'worklist changed; prepare a fresh bundle')
     return p, b
 
 
@@ -151,13 +187,43 @@ def collect(project, directory):
                      max_nonboundary_rechecks=MAX_DISPUTES, draft_only=True)
 
 
-def assemble(project, directory, output):
+def coordinator_drafts(collected):
+    """Only copy facts. Deliberately incomplete audit cannot pass commit unchanged."""
+    audit = dict(task_hashes=copy.deepcopy(collected['task_hashes']),
+                 boundaries=[dict(copy.deepcopy(b), verdict='uncertain', visual_reason='', state_reason='')
+                             for b in collected['boundary_audit_required']],
+                 cross_references=[dict(shot_id=sid, reason='') for sid in collected['cross_reference_audit_required']],
+                 rechecked_shot_ids=[], deferred_shot_ids=[], accepted_shot_ids=[], resolutions=[])
+    worklist = {key: copy.deepcopy(collected[key]) for key in
+                ('boundary_audit_required', 'cross_reference_audit_required', 'dispute_shot_ids', 'max_nonboundary_rechecks')}
+    worklist['pending_checks'] = ['checks', 'coverage.mapping_verified', 'grouping_checked', 'external boundary_checks',
+                                  'boundary reasons and verdicts', 'cross-reference reasons', 'dispute disposition']
+    worklist['record_hashes'] = {field: [dict(record_hash=core.digest(row), index=i,
+                                          shot_ids=(row.get('shot_ids', [row.get('shot_id')]) if isinstance(row, dict) else []))
+                                     for i, row in enumerate(collected['review'].get(field, []))] for field in ROWS}
+    worklist['limitation_hashes'] = [dict(record_hash=core.digest(row), record=row)
+                                    for row in collected['review']['coverage']['limitations']]
+    return {'FINAL_REVIEW.json': copy.deepcopy(collected['review']), 'COORDINATOR_AUDIT.json': audit,
+            'WORKLIST.json': worklist}
+
+
+def assemble(project, directory, output, drafts_dir=None):
     core.require(Path(output).resolve() != Path(project).resolve() and
                  not Path(output).resolve().is_relative_to(Path(directory).resolve()),
                  'collected output must be outside the frozen bundle and project')
+    if drafts_dir is not None:
+        drafts_dir = Path(drafts_dir).resolve()
+        core.require(not Path(output).exists() and not drafts_dir.exists() and not drafts_dir.is_relative_to(Path(directory).resolve())
+                     and not Path(output).resolve().is_relative_to(drafts_dir)
+                     and not Path(project).resolve().is_relative_to(drafts_dir),
+                     'use a new coordinator directory outside the frozen bundle, project and collected output')
     with evidence_operation():
         _, _, result = collect(project, directory)
     core.save(output, result)
+    if drafts_dir is not None:
+        drafts_dir.mkdir(parents=True)
+        for name, data in coordinator_drafts(result).items():
+            core.save(drafts_dir / name, data)
     return result
 
 
@@ -250,6 +316,7 @@ def main():
     p.add_argument('project'); p.add_argument('group'); p.add_argument('units'); p.add_argument('output')
     p = sub.add_parser('assemble')
     p.add_argument('project'); p.add_argument('bundle'); p.add_argument('output')
+    p.add_argument('--drafts-dir', help='Create new coordinator templates; never auto-approve')
     p = sub.add_parser('commit')
     p.add_argument('project'); p.add_argument('bundle'); p.add_argument('review'); p.add_argument('audit')
     a = parser.parse_args()
@@ -257,7 +324,7 @@ def main():
         result = prepare(a.project, a.group, core.read(a.units), a.output)
         print(result['mode'], len(result['tasks']))
     elif a.command == 'assemble':
-        assemble(a.project, a.bundle, a.output)
+        assemble(a.project, a.bundle, a.output, a.drafts_dir)
         print('draft only; coordinator review required')
     else:
         result = commit(a.project, a.bundle, a.review, a.audit)
