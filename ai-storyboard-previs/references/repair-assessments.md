@@ -2,7 +2,7 @@
 
 本文件只规定原有组级审查顺便填写的证据，不启动返修、不增加逐镜判断。付费执行、提示词、预算与恢复仅在需要执行时读 [自动返修](auto-repair.md)。视觉规则仍以 review.md 为准。
 
-首次整理将 `shots[].script` 保存为该镜原始脚本文本（含标点、换行），不得摘要；`source_script` 保留完整输入。可选 `video_format_requirements` 只能逐字摘录原文中的全局格式要求。`repair_cycle.py baseline` 冻结基准。旧项目只存摘要时，从原输入恢复并重建有效审查；真实脚本修订须创建独立项目版本，不得清除已占用付费额度。
+首次整理将 `shots[].script` 保存为该镜原始脚本文本（含标点、换行），不得摘要；`source_script` 保留完整输入。可选 `video_format_requirements` 只能逐字摘录原文中的全局格式要求。`repair_cycle.py baseline` 冻结基准。生成提示词时工具从原文派生 generation_text，移出明确的镜头头部，不修改原始字段或基准；代理不得手工清洗已冻结原文或请求。旧项目只存摘要时，从原输入恢复并重建有效审查；真实脚本修订须创建独立项目版本，不得清除已占用付费额度。
 
 在每份来源视频的组级审查中填写 `repair_assessments`：每个确认 `FAIL` 或 `absent` 镜头恰有一条，无此类镜头时填空数组；PASS 和 uncertain 不填。以下仅为字段示意，必须换为本案真实证据：
 

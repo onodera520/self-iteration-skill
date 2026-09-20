@@ -9,6 +9,7 @@ import test_imported_review as imported_fixtures
 import previs as core
 import planner
 import repair_cycle as repair
+import repair_prompt
 
 
 class FakeWorkflow:
@@ -175,7 +176,7 @@ class RepairCycleTests(fixtures.Base):
         self.assertEqual(request['duration_seconds'],3)
         self.assertEqual([b['duration'] for b in request['blocks']],[1.0]*3)
         for i,b in enumerate(request['blocks'],1):
-            self.assertIn(f"镜头{i},【时长】1.0s。【镜头设计】{b['design']}。【镜头内容】{b['text']}",request['prompt'])
+            self.assertIn(f"镜头{i},【生成时长】1.0s。【镜头设计】{b['design']}。【镜头内容】{b['text']}",request['prompt'])
         for mutate in ('prompt','blocks','assets','duration_seconds'):
             bad=copy.deepcopy(request)
             if mutate=='prompt': bad[mutate]+='任意新剧情'
@@ -245,7 +246,7 @@ class RepairCycleTests(fixtures.Base):
         self.ready()
         request=repair.prepare(self.p,self.path,'G01')
         self.assertEqual(request['prompt'].count(repair.PREVIS_DIRECTIVE),1)
-        self.assertGreater(request['prompt'].index(repair.PREVIS_DIRECTIVE),request['prompt'].index('镜头3,【时长】'))
+        self.assertGreater(request['prompt'].index(repair.PREVIS_DIRECTIVE),request['prompt'].index('镜头3,【生成时长】'))
         self.assertTrue(request['prompt'].endswith(self.p['repair_asset_style']['assets'][-1]['guidance']))
         bad=copy.deepcopy(request)
         bad['prompt']=bad['prompt'].replace(repair.PREVIS_DIRECTIVE,'允许音乐和字幕')
@@ -409,6 +410,118 @@ class RepairCycleTests(fixtures.Base):
         self.assertEqual(self.p['repairs'][-1]['recheck'],['G01','G02'])
         self.assertTrue(all(core.review_current(self.p,self.path,gid) is None for gid in ('G01','G02')))
         self.assertEqual(api.submissions,2)
+
+    def test_full_headers_render_once_without_changing_baseline_or_dialogue(self):
+        bodies = [s['script'] for s in self.p['shots']]
+        bodies[1] += '\n内心OS {等3秒再走。}，随后抬头。'
+        for i, (shot, body) in enumerate(zip(self.p['shots'], bodies), 1):
+            shot['script'] = f'镜头{i}，【时长】{i+1}s，【镜头设计】近景，侧面平视。\n【镜头内容】{body}'
+        self.p['source_script'] = '\n'.join(s['script'] for s in self.p['shots'])
+        self.ready()
+        before = copy.deepcopy(self.p)
+        request = repair.prepare(self.p, self.path, 'G01')
+        self.assertEqual(self.p, before)
+        self.assertEqual([b['generation_text'] for b in request['blocks']], bodies)
+        self.assertEqual([b['text'] for b in request['blocks']], [s['script'] for s in self.p['shots']])
+        self.assertEqual([b['design'] for b in request['blocks']], ['近景，侧面平视']*3)
+        for tag in ('【生成时长】', '【镜头设计】', '【镜头内容】'):
+            self.assertEqual(request['prompt'].count(tag), 3)
+        self.assertNotIn('【时长】', request['prompt'])
+        self.assertIn('内心OS {等3秒再走。}，随后抬头。', request['prompt'])
+        self.assertEqual(request['prompt_version'], repair_prompt.VERSION)
+        self.assertEqual(request['prompt_fingerprint'], core.digest(dict(
+            version=repair_prompt.VERSION, prompt=request['prompt'], blocks=request['blocks'])))
+
+    def test_collect_all_malformed_original_headers_and_block_before_submit(self):
+        for shot in self.p['shots'][:2]:
+            shot['script'] = '【时长】3s，缺少完整镜头头部。' + shot['script']
+        self.p['source_script'] = '\n'.join(s['script'] for s in self.p['shots'])
+        self.ready()
+        before = copy.deepcopy(self.p)
+        api = FakeWorkflow()
+        with self.assertRaises(ValueError) as caught:
+            repair.submit(self.p, self.path, 'G01', api, True)
+        self.assertIn('S01:', str(caught.exception))
+        self.assertIn('S02:', str(caught.exception))
+        self.assertEqual(api.submissions, 0)
+        self.assertEqual(self.p, before)
+
+    def test_collect_all_generated_request_errors(self):
+        self.ready()
+        bad = copy.deepcopy(repair.prepare(self.p, self.path, 'G01'))
+        bad['blocks'].reverse()
+        bad['blocks'][0]['generation_text'] = ''
+        bad['blocks'][1].pop('keyframe_target')
+        bad['duration_seconds'] = 14
+        bad['prompt'] += '\n【镜头设计】重复【时长】3s'
+        with self.assertRaises(ValueError) as caught:
+            repair.prepare(self.p, self.path, 'G01', bad)
+        for message in ('count/order', 'empty shot content', 'missing keyframe', 'duration sum', 'duplicate', 'leaked'):
+            self.assertIn(message, str(caught.exception))
+
+    def test_fail_and_absent_get_distinct_repair_labels(self):
+        self.ready({'S01':'FAIL', 'S02':'absent'}, {'S02':'absent'})
+        request = repair.prepare(self.p, self.path, 'G01')
+        self.assertIn('【已定位画面修正】镜头1=S01', request['prompt'])
+        self.assertIn('【必要漏镜补齐】镜头2=S02', request['prompt'])
+        self.assertNotIn('以下镜头在上一次生成中缺失', request['prompt'])
+
+    def test_prompt_preview_never_overwrites_previous_request(self):
+        self.ready()
+        request = repair.prepare(self.p, self.path, 'G01')
+        path = self.path.parent / '.repair/G01-prompt.json'
+        old = repair._compose_prompt(self.p, self.path, 'G01', 0)
+        core.save(path, old)
+        before = path.read_bytes()
+        target = repair.save_prompt(path, request)
+        self.assertNotEqual(path, target)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(core.read(target), request)
+        self.assertEqual(repair.save_prompt(path, request), target)
+        with self.assertRaisesRegex(ValueError, 'choose a new output'):
+            repair.save_prompt(path, request, explicit=True)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_legacy_formats_recover_and_install_without_new_submission(self):
+        self.ready()
+        original = copy.deepcopy(self.p)
+        for version in (None, 0):
+            with self.subTest(version=version):
+                self.p = copy.deepcopy(original)
+                request = repair._compose_prompt(self.p, self.path, 'G01', version)
+                task = dict(id='old-task', kind='fixed_workflow_video', target_id='G01',
+                    repair_source_group='G01', request=request, fingerprint=core.digest(request),
+                    reserved=True, status='query_error', task_id='123456', installed=False,
+                    outputs=[], output_hashes=[])
+                self.p['tasks']['old-task'] = task
+                api = FakeWorkflow()
+                with self.assertRaises(ValueError):
+                    repair.prepare(self.p, self.path, 'G01', request)
+                self.assertEqual(repair.submit(self.p, self.path, 'G01', api, True), 'SUCCESS')
+                repair.validate_stored_request(self.p, self.path, task)
+                self.assertEqual(task['request'], request)
+                with patch('media.probe', return_value={'streams':[{'codec_type':'video'}]}), patch('media.duration', return_value=6):
+                    repair.install(self.p, self.path, 'old-task')
+                self.assertTrue(self.p['tasks']['old-task']['installed'])
+                self.assertEqual(api.submissions, 0)
+                self.assertEqual(api.queries, 1)
+                self.assertIsNone(core.review_current(self.p, self.path, 'G01'))
+
+    def test_legacy_request_does_not_bypass_input_or_tamper_checks(self):
+        self.ready()
+        request = repair._compose_prompt(self.p, self.path, 'G01', 0)
+        task = dict(repair_source_group='G01', request=request, fingerprint=core.digest(request))
+        request['prompt'] += '改写剧情'
+        with self.assertRaisesRegex(ValueError, 'Invalid stored'):
+            repair.validate_stored_request(self.p, self.path, task)
+        task['fingerprint'] = core.digest(request)
+        with self.assertRaisesRegex(ValueError, 'Inputs changed'):
+            repair.validate_stored_request(self.p, self.path, task)
+        request = repair._compose_prompt(self.p, self.path, 'G01', 0)
+        task.update(request=request, fingerprint=core.digest(request))
+        Path(self.p['assets'][0]['path']).write_bytes(b'REPLACED')
+        with self.assertRaises(ValueError):
+            repair.validate_stored_request(self.p, self.path, task)
 
 
 if __name__=='__main__':unittest.main()

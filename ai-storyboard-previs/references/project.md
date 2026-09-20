@@ -67,9 +67,9 @@
 - shot_reviews：每镜 verdict: PASS|FAIL|uncertain|absent、reason、evidence_times；已定位镜须含七项 checks。一镜 FAIL 不妨碍其他镜独立 PASS；受影响的连续性边界仍须核对。漏镜不可 PASS。
 - reference_assessments：每镜 decision: anchor|ai_fill|pending、reason、evidence_times、derivable: true|false|null、basis_shot_ids。decision 是参考图取舍候选，独立于 mapping.status 与 shot_reviews.verdict；组合须遵守 [审查决策表](review.md#可推导省图判据与决策表)。ai_fill 须列按镜序前后夹住本镜的两个合格依据镜，优先选最近且足以支持剧情判断的 PASS＋anchor 锚点；最近是建议而非工具硬约束，选较远依据须说明原因。依据必须独立 PASS、保留图且有有效资产支持；reason 须说明省去独立图后故事仍可读且无歧义，不要求唯一复原手势或微表情；关键剧情节点保护，纯表演细节不自动保护。漏镜不填本镜帧证据，改引用完整补查和依据镜。没有可靠结论填 null，不计必要漏镜；已明确必须保留则填 false 并说明依据。连续缺失的镜头不能互为依据，应向外寻找合格双侧锚点；仍缺一侧且判断不足填 null，已知必须保留填 false。最终规划仍检查候选的必要锚点约束。所有省图均为建议/未验证。context.reference_policy_version 纳入指纹，旧结论需按当前判据复核。
 - tasks/repairs/repair_round：保留旧生成与新增固定工作流返修记录，不清空历史绕过安全限制。user_video_prompt 为旧生成模式字段，默认不需要。
-- repair_baseline / repair_decisions / repair_deliveries：冻结脚本原文、独立机读判定、原视频与一次返修各自不可覆盖的交付快照。repair_assessments 在原有组级审查内记录，repair policy=1 与脚本/资产/视频/审查/聚合指纹绑定，详见 [自动返修](auto-repair.md)。video_format_requirements 可选，须为 source_script 中全局格式要求的逐字摘录。
+- repair_baseline / repair_decisions / repair_deliveries：冻结脚本原文、独立机读判定、原视频与一次返修各自不可覆盖的交付快照。repair_assessments 在原有组级审查内记录，repair policy=2 与脚本/资产/视频/审查/聚合指纹绑定，详见 [自动返修](auto-repair.md)。video_format_requirements 可选，须为 source_script 中全局格式要求的逐字摘录。
 
-- shots[].shot_design：一次整理从脚本摘取的镜头设计，与原文一并冻结；缺省只用已有景别或标未指定，不新增机位。repair_asset_style：按原资产顺序保存 asset_id、sha256、visible_style_facts、guidance 和 preserves_story，绑定返修判定；详见 [受控提示词](auto-repair.md#受控提示词)。返修每镜固定 1.0s、总长为来源镜数 ×1 秒，含漏镜和 ai_fill；不覆盖原脚本 duration 或改变两表计划时长。末尾固定预演段与资产风格均不可由临时请求覆盖。
+- shots[].shot_design：一次整理从脚本摘取的镜头设计，与原文一并冻结；缺省只用已有景别或标未指定，不新增机位。repair_asset_style：按原资产顺序保存 asset_id、sha256、visible_style_facts、guidance 和 preserves_story，绑定返修判定；详见 [受控提示词](auto-repair.md#受控提示词)。返修每镜固定 1.0s、总长为来源镜数 ×1 秒，含漏镜和 ai_fill；不覆盖原脚本 duration 或改变两表计划时长。内部请求 prompt_version=2；blocks.text 保留冻结原文，generation_text 仅为确定性派生正文，不写回脚本。prompt_fingerprint 绑定版本、提示词与逐镜块；生成时长标签为【生成时长】，原头部计划时长不嵌套进正文。旧请求恢复和文件保留见自动返修。末尾固定预演段与资产风格均不可由临时请求覆盖。
 
 ## 资产审查证据版本
 

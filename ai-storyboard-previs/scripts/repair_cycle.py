@@ -8,6 +8,7 @@ import re
 
 import previs as core
 import planner
+import repair_prompt
 
 POLICY = 2
 WORKFLOW = "2099403222661287938"
@@ -167,7 +168,8 @@ def asset_style(p, assets):
     return profile
 
 
-def make_prompt(p, project, gid):
+def _compose_prompt(p, project, gid, version):
+    # None/0 reproduce the two historical unversioned formats for installation only.
     d = current_decision(p, project, gid)
     core.require(d['triggered'], 'Repair threshold not reached')
     from requirements import contexts
@@ -175,6 +177,8 @@ def make_prompt(p, project, gid):
     original = {s['shot_id']: s for s in baseline(p)['shots']}
     assessment = {s['shot_id']: s for s in d['assessments']}
     ss = core.shots(p, core.group(p, gid))
+    views = repair_prompt.input_views(ss, original, resolved,
+        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version == repair_prompt.VERSION else {}
     assets = d['binding']['assets']
     style = asset_style(p, assets)
     descriptions = {a['id']: a.get('description', '') for a in p['assets']}
@@ -187,12 +191,14 @@ def make_prompt(p, project, gid):
     blocks, corrections = [], []
     for i, s in enumerate(ss, 1):
         block = dict(shot_id=s['id'], text=original[s['id']]['text'], design=original[s['id']]['design'], duration=1.0)
+        if views:
+            block.update(views[s['id']])
         if s['id'] in d['allowed_correction_shot_ids']:
             block['correction'] = assessment[s['id']]['correction']
             corrections.append((i, s['id']))
         # Script-derived keyframe requirements only; they add no new story content.
         requirement = resolved.get(s['id']) or {}
-        core.require(not requirement or requirement['ready'],
+        core.require(version == 0 or not requirement or requirement['ready'],
                      'Resolve provisional shot requirements before repair: ' + s['id'])
         must = [x for x in (requirement.get('must_have') or []) if x]
         must_not = [x for x in (requirement.get('must_not_have') or []) if x]
@@ -202,13 +208,14 @@ def make_prompt(p, project, gid):
             block['must_have'] = must
         if must_not:
             block['must_not_have'] = must_not
-        if must or must_not:
+        if (must or must_not) and version != 0:
             frame = requirement['keyframe']
             block['keyframe_target'] = dict(phase=frame['phase'], description=frame['description'])
         if changes:
             block['critical_changes'] = changes
         blocks.append(block)
-        line = f"镜头{i},【时长】1.0s。【镜头设计】{block['design']}。【镜头内容】{block['text']}"
+        duration_tag = '生成时长' if views else '时长'
+        line = f"镜头{i},【{duration_tag}】1.0s。【镜头设计】{block['design']}。【镜头内容】{block.get('generation_text', block['text'])}"
         if 'keyframe_target' in block:
             phase = {'entry': '起态', 'action': '动作中', 'exit': '终态'}[frame['phase']]
             line += f"【目标静帧】{phase}：{frame['description']}。以下必须/不得出现仅约束该时刻，完整动作仍按原脚本先后呈现。"
@@ -224,22 +231,82 @@ def make_prompt(p, project, gid):
     lines += ['\n【固定预演要求】', PREVIS_DIRECTIVE,
               '小幅运动仍须清楚呈现原脚本的关键动作和结果。对白、OS、VO仅用于理解剧情，不输出声音或屏幕文字。']
     if corrections:
+        correction_label = ('以下镜头在上一次生成中缺失或未被独立呈现，必须各自单独成一个硬切镜头，不得省略、不得与相邻镜合并：'
+            if version == 0 else '以下为本次需修正或补齐的镜头，必须各自单独成一个硬切镜头，不得省略、不得与相邻镜合并：')
         lines += ['【必须独立成镜的镜头】',
-                  '以下为本次需修正或补齐的镜头，必须各自单独成一个硬切镜头，不得省略、不得与相邻镜合并：'
+                  correction_label
                   + '、'.join(f"镜头{i}={sid}" for i, sid in corrections)]
+        if views:
+            missing = set(d['necessary_missing_shot_ids'])
+            for label, ids in [('【必要漏镜补齐】', [(i, sid) for i, sid in corrections if sid in missing]),
+                               ('【已定位画面修正】', [(i, sid) for i, sid in corrections if sid not in missing])]:
+                if ids:
+                    lines.append(label + '、'.join(f'镜头{i}={sid}' for i, sid in ids))
     lines += ['【原始资产风格】', '以下风格仅约束视觉表现，不改变原脚本人物关系、动作、场景与时空；资产展示背景不替代剧情背景。']
     lines.extend(f"图{i}（{row['asset_id']}）：{row['guidance']}" for i, row in enumerate(style['assets'], 1))
     seconds = len(ss)
-    return dict(workflow_id=WORKFLOW, instance_type='plus', source_group_id=gid,
+    result = dict(workflow_id=WORKFLOW, instance_type='plus', source_group_id=gid,
                 decision_fingerprint=d['fingerprint'], binding=copy.deepcopy(d['binding']),
                 prompt='\n'.join(lines), blocks=blocks, assets=copy.deepcopy(assets),
                 asset_style=copy.deepcopy(style), previs_directive=PREVIS_DIRECTIVE,
                 duration_seconds=float(seconds), aspect_ratio=p['config'].get('aspect_ratio'))
+    if version == repair_prompt.VERSION:
+        result['prompt_version'] = version
+        result['prompt_fingerprint'] = core.digest(dict(version=version, prompt=result['prompt'], blocks=blocks))
+        repair_prompt.validate(result, [s['id'] for s in ss])
+    return result
+
+
+def make_prompt(p, project, gid):
+    return _compose_prompt(p, project, gid, repair_prompt.VERSION)
+
+
+def validate_stored_request(p, project, task):
+    """Old requests can recover/install, but never become a new-submission format."""
+    request = task['request']
+    core.require(task['fingerprint'] == core.digest(request), 'Invalid stored repair request')
+    gid = task['repair_source_group']
+    if 'prompt_version' in request:
+        core.require(request['prompt_version'] == repair_prompt.VERSION, 'Unsupported repair prompt version')
+        expected = prepare(p, project, gid)
+        core.require(request == expected, 'Inputs changed since submission; do not attach stale repair')
+    else:
+        # Reconstruct exact historical bytes/fields while still checking current evidence,
+        # original baseline, asset hashes and decision binding. No migration of saved data.
+        matched = False
+        for version in (None, 0):
+            try:
+                matched = request == _compose_prompt(p, project, gid, version)
+            except ValueError:
+                continue
+            if matched:
+                break
+        core.require(matched, 'Inputs changed since submission or unsupported legacy request')
+        request_limits(p, request)
+
+
+def save_prompt(path, request, explicit=False):
+    """Never overwrite an older request when previewing a new prompt version."""
+    path = Path(path)
+    if path.exists() and core.read(path) != request:
+        core.require(not explicit, 'Prompt output already exists with different content; choose a new output path')
+        path = path.with_name(f'{path.stem}-v{request["prompt_version"]}-{core.digest(request)[:12]}{path.suffix}')
+    core.require(not path.exists() or core.read(path) == request, 'Versioned prompt output already differs')
+    if not path.exists():
+        core.save(path, request)
+    return path
 
 
 def prepare(p, project, gid, request=None):
     expected = make_prompt(p, project, gid)
+    if request is not None and request.get('prompt_version') == repair_prompt.VERSION:
+        repair_prompt.validate(request, [s['id'] for s in core.shots(p, core.group(p, gid))])
     core.require(request is None or request == expected, 'Prompt/request changed outside approved correction scope')
+    request_limits(p, expected)
+    return expected
+
+
+def request_limits(p, expected):
     core.require(1 <= len(expected['assets']) <= 9, 'Fixed workflow needs 1 to 9 original assets; do not drop or split')
     core.require(expected['aspect_ratio'], 'Explicit aspect ratio required')
     for a in expected['assets']:
@@ -247,7 +314,6 @@ def prepare(p, project, gid, request=None):
     limits = p['config'].get('fixed_workflow_limits', {})
     if 'max_duration_seconds' in limits:
         core.require(expected['duration_seconds'] <= limits['max_duration_seconds'], 'Full script exceeds configured workflow duration')
-    return expected
 
 
 def snapshot(p, project, out, stage):
@@ -380,8 +446,7 @@ def install(p, project, key):
                  'Complete all reserved source repairs before installing; failed or unknown task cannot become a second review')
     core.require(key == 'all' or len(pending) == 1, 'Multiple sources: use install all for atomic version/boundary invalidation')
     for t in pending:
-        core.require(prepare(p, project, t['repair_source_group']) == t['request'],
-                     'Inputs changed since submission; do not attach stale repair')
+        validate_stored_request(p, project, t)
         core.require(core.sha(Path(t['outputs'][0])) == t['output_hashes'][0], 'Downloaded output changed')
     # Mutate a copy: failed probing cannot leave a partially advanced version.
     candidate = copy.deepcopy(p)
@@ -434,7 +499,10 @@ def main():
         core.save(project, p)
         if cmd in ('decide', 'prompt'):
             output = args.output or project.parent / '.repair' / f'{args.target}-{cmd}.json'
-            core.save(output, result)
+            if cmd == 'prompt':
+                output = save_prompt(output, result, explicit=args.output is not None)
+            else:
+                core.save(output, result)
             print(str(output.resolve()))
         else:
             print(result if isinstance(result, str) else 'Saved')
