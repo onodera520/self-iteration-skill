@@ -9,7 +9,7 @@ import re
 import previs as core
 import planner
 
-POLICY = 1
+POLICY = 2
 WORKFLOW = "2099403222661287938"
 PREVIS_DIRECTIVE = '严格按照分镜脚本生成一段快速切镜的视频，每个分镜不需要很大的动作幅度。没有台词，没有音乐，不要出现字幕。每个分镜硬切转场。'
 DECISION_STATE = ('fingerprint', 'execution_status', 'task_key', 'automatic_allowance_used')
@@ -74,14 +74,19 @@ def validate_assessments(p, r):
                              for e in r['evidence']), 'Repair FAIL needs same-shot timed evidence')
 
 
-def threshold(total, eligible, critical):
+def threshold(total, eligible, critical, necessary_missing=()):
     ids = list(dict.fromkeys(eligible))
     keys = list(dict.fromkeys(critical))
-    core.require(total > 0 and len(ids) <= total and set(keys) <= set(ids), 'Invalid repair counts')
+    missing = list(dict.fromkeys(necessary_missing))
+    core.require(total > 0 and len(ids) <= total and set(keys) <= set(ids) and
+                 set(missing) <= set(ids), 'Invalid repair counts')
     ratio = Decimal(len(ids)) / Decimal(total)
-    return dict(triggered=bool(keys) or (len(ids) >= 2 and ratio >= Decimal('0.2')),
+    critical_trigger = bool(missing) and bool(keys)
+    cumulative = len(ids) >= (2 if missing else 3) and ratio >= Decimal('0.2')
+    return dict(triggered=critical_trigger or cumulative,
                 error_count=len(ids), total=total, ratio=float(ratio), critical_shot_ids=keys,
-                problem_shot_ids=ids, trigger='critical' if keys else ('cumulative' if len(ids) >= 2 and ratio >= Decimal('0.2') else 'below_threshold'))
+                necessary_missing_shot_ids=missing, problem_shot_ids=ids,
+                trigger='critical' if critical_trigger else ('cumulative' if cumulative else 'below_threshold'))
 
 
 def binding(p, project, gid):
@@ -106,10 +111,12 @@ def decide(p, project, gid):
     validate_assessments(p, r)
     rows = {x['shot_id']: x for x in planner.current_aggregation(p, project)['decisions']}
     assessments = {a['shot_id']: a for a in r.get('repair_assessments', [])}
-    eligible, critical, allowed = [], [], []
+    eligible, critical, allowed, missing = [], [], [], []
     for v in r['shot_reviews']:
         sid, verdict = v['shot_id'], v['verdict']
         necessary_absent = verdict == 'absent' and rows[sid]['status'] == 'missing_required'
+        if necessary_absent:
+            missing.append(sid)
         if verdict == 'FAIL' or necessary_absent:
             allowed.append(sid)
             a = assessments[sid]
@@ -117,7 +124,7 @@ def decide(p, project, gid):
                 eligible.append(sid)
                 if a['critical']:
                     critical.append(sid)
-    result = dict(binding=bound, **threshold(len(r['shot_reviews']), eligible, critical),
+    result = dict(binding=bound, **threshold(len(r['shot_reviews']), eligible, critical, missing),
                   allowed_correction_shot_ids=allowed, assessments=list(assessments.values()),
                   review_verdict=r['verdict'], execution_status='not_started', task_key=None)
     # A repaired video never obtains another automatic allowance, even after new reviews.

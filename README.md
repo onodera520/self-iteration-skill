@@ -48,6 +48,8 @@
 
 匹配完成后可以先用 `review_draft.py prepare` 生成带镜号、时间点、证据路径和 SHA256 的审查草稿，再根据实际画面填写观察和判断。填写后用 `review_draft.py check` 批量检查结构、证据指纹和字段完整性；它是只读诊断，不会把草稿登记为正式审查，也不会自动判定画面正确。只有完成视觉审查后，才使用 `previs.py review` 正式登记结果。
 
+准备审查时先完成整组候选定位，再集中补看动作过程、关键状态、疑似漏镜和组边界；不会因为稀疏抽帧或联系表没有明显问题就跳过逐镜和相邻承接审查。候选帧的 `observation` 与 `visible_facts` 必须绑定当前证据的精确时间和 SHA256，只能复用画面中可见的事实，不能自动变成解释、PASS 或省图结论。证据变化后必须重新查看。
+
 不检查屏幕文字、具体对白逐字一致性、配音文本或对白口型同步；对白的剧情含义和明确的画面动作仍用于理解与校对。原视频实际时长不同于计划时长不会导致画面失败。
 
 内容不符且影响剧情或违反明确严格要求时，定位到镜号和视频时间，并写成“该镜需重新生成”的建议。确认漏镜后，只有在前后镜头检验通过、资产和状态能够承接时，才会建议“可推导省图，未验证”；不能推导的必要镜头标为“必要漏镜，需补生成”；证据不足则继续标“待检查”。缺失镜头不会用另一个缺失或不确定镜头互相证明。
@@ -76,7 +78,9 @@ images/
 
 ## 一次自动返修
 
-一处有本镜证据的关键剧情错误或关键必要漏镜即可触发；其他影响剧情的错误与必要漏镜至少 2 镜且占比 ≥20% 才触发。同镜去重，可推导漏镜和不确定项不计；必要漏镜 bad_num 的原意不变。
+没有必要漏镜时，影响剧情的确认错误至少 3 镜且占比 ≥20% 才触发，关键问题也受此门槛约束。存在必要漏镜时保留原规则：一处有本镜证据的关键剧情错误或关键必要漏镜即可触发；其他影响剧情的错误与必要漏镜至少 2 镜且占比 ≥20% 才触发。同镜去重，可推导漏镜和不确定项不计；必要漏镜 bad_num 的原意不变。
+
+当前返修判定策略版本为 2。没有必要漏镜时，关键问题也必须满足 3 镜且 20% 的累计门槛；存在必要漏镜时才保留关键问题一镜触发的旧规则。策略更新会使旧判定失效，继续处理前必须按当前规则重算。
 
 脚本始终是唯一剧情基准。返修 prompt 保留所有镜头原文，附上已整理的必须出现、不得出现和关键变化约束，仅给已确认错误或必要漏镜追加修复要求，采用“镜头N,【时长】1.0s。【镜头设计】…。【镜头内容】…”格式。需修正或补齐的镜头另列清单，强调独立硬切。每镜固定 1.0 秒，末尾绑定快速硬切、无台词/音乐/字幕要求和按原图分析的资产风格。两表仍展示原始脚本计划时长。
 
@@ -123,14 +127,16 @@ powershell -ExecutionPolicy Bypass -File tests/run_checks.ps1
 ```powershell
 python ai-storyboard-previs/scripts/prepare_imported.py preflight --script SCRIPT.md --video INPUT.mp4 --asset CHARACTER.png --asset SCENE.png
 python ai-storyboard-previs/scripts/prepare_imported.py run PROJECT.json G01 INPUT.mp4 EVIDENCE_DIR --run-dir PREPARE_INTERNAL_DIR
-python ai-storyboard-previs/scripts/review_draft.py prepare PROJECT.json G01 GROUP_REVIEW.json
-# 根据实际画面填写 GROUP_REVIEW.json 后再检查
+python ai-storyboard-previs/scripts/review_draft.py prepare PROJECT.json G01 GROUP_REVIEW.json --context-output CONTEXT.json
+# 查看 CONTEXT.json，并根据实际画面填写 GROUP_REVIEW.json 后再检查
 python ai-storyboard-previs/scripts/review_draft.py check PROJECT.json GROUP_REVIEW.json
 # 视觉审查完成后才正式登记
 python ai-storyboard-previs/scripts/previs.py review PROJECT.json GROUP_REVIEW.json
 ```
 
 `preflight` 只确认脚本、视频和资产路径可读；`run` 串行完成集中校验、视频登记、基线冻结和稀疏抽帧，并在内部目录保存准备报告。`review_draft.py` 的 `prepare` 和 `check` 都是证据绑定的准备/诊断步骤，不替代人工或视频理解审查，也不代表已经通过。
+
+`prepare --context-output` 会在同一次准备中生成审查草稿和候选上下文，减少重复定位。上下文里的单帧观察必须保留各自的证据时间和 SHA256；工具可以复用这些中性的可见事实，但不会合并不同帧、自动解释动作或批准审查。
 
 只有存在多个相互独立的事件、并且分派与协调成本确实值得时，才使用最多两个并行审查任务。并行流程中的 `resolutions` 会为被修改或丢弃的 worker 结论生成待填写的处理记录；理由补齐并完成最终检查后，才由唯一写回步骤提交。它是可选的内部提速路径，不承诺固定加速比例：
 
@@ -167,7 +173,9 @@ requirements-dev.txt   开发与测试依赖
 - `ai-storyboard-previs/references/shot-requirements.md`：逐镜要求、来源证据和状态字段的约定。
 - `ai-storyboard-previs/scripts/finish_review.py`：审查后的串行收尾与交付校验。
 - `ai-storyboard-previs/scripts/prepare_imported.py`：已有视频的路径预检、集中准备和稀疏证据入口。
-- `ai-storyboard-previs/scripts/review_draft.py`：证据绑定审查草稿的生成与只读批量检查。
+- `ai-storyboard-previs/scripts/review_draft.py`：证据绑定审查草稿、候选上下文的生成与只读批量检查。
+- `ai-storyboard-previs/scripts/storyboard.py`：候选帧登记与单帧事实的精确证据绑定。
+- `ai-storyboard-previs/scripts/repair_cycle.py`：返修策略版本、触发阈值和一次提交控制。
 - `ai-storyboard-previs/scripts/parallel_review.py`：最多两个只读审查任务的冻结、收集和唯一写回。
 - `ai-storyboard-previs/scripts/review_timing.py`：记录阶段区间并按重叠区间合并统计。
 

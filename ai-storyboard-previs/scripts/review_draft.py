@@ -12,23 +12,40 @@ from validation import Report, text
 
 
 def from_context(ctx, shot_ids=None):
-    from storyboard import CHECKS
+    from storyboard import CHECKS, has_frame_observation
     ids = shot_ids if shot_ids is not None else [s['shot_id'] for s in ctx['shots']]
     mapping = {s['shot_id']: s for s in ctx['mapping']['shots']}
+    frames = {(f['sha256'], f['time']): f for f in ctx['extraction']['frames']}
     rows, references, evidence = [], [], []
     for shot in ctx['shots']:
         sid = shot['shot_id']
         if sid not in ids:
             continue
         selected = shot['selected_frame']
-        times = []
+        shot_evidence = {}
         absent = mapping[sid]['status'] == 'absent'
         if selected and not absent:
-            times = [selected['source']['time']]
-            evidence.append(dict(shot_id=sid, path=selected['path'], sha256=selected['sha256'],
-                                 time=times[0], observation=''))
+            time = selected['source']['time']
+            shot_evidence[selected['sha256'], time] = dict(
+                shot_id=sid, path=selected['path'], sha256=selected['sha256'], time=time,
+                observation='', visible_facts=[], interpretation='')
+        if mapping[sid]['status'] == 'matched':
+            for candidate in mapping[sid]['candidates']:
+                if not has_frame_observation(candidate):
+                    continue
+                key = candidate['sha256'], candidate['time']
+                frame = frames.get(key)
+                core.require(frame is not None, 'candidate observation is not bound to current extraction')
+                row = shot_evidence.setdefault(key, dict(
+                    shot_id=sid, **{k: frame[k] for k in ('path', 'sha256', 'time')}, interpretation=''))
+                # Copy only neutral single-frame notes. Interpretations and verdicts stay unapproved.
+                row.update(observation=candidate['observation'], visible_facts=copy.deepcopy(candidate['visible_facts']))
+        observed = sorted(shot_evidence.values(), key=lambda e: e['time'])
+        evidence.extend(observed)
+        times = [e['time'] for e in observed]
         rows.append(dict(shot_id=sid, verdict='absent' if absent else 'uncertain', reason='',
-                         evidence_times=times, checks={k: 'uncertain' for k in sorted(CHECKS)}, followup=''))
+                         identity_reason='', evidence_times=times,
+                         checks={k: 'uncertain' for k in sorted(CHECKS)}, followup=''))
         references.append(dict(shot_id=sid, decision='pending', derivable=None,
                                basis_shot_ids=[], evidence_times=list(times), reason=''))
     return dict(**{k: ctx[k] for k in ('group_id', 'version', 'video_sha256', 'context_fingerprint',
@@ -41,9 +58,12 @@ def from_context(ctx, shot_ids=None):
                                  for b in ctx['boundaries']])
 
 
-def prepare(project, gid, output):
+def prepare(project, gid, output, context_output=None):
     output = Path(output).resolve()
     core.require(not output.exists(), 'use a new draft file; existing judgments must not be overwritten')
+    if context_output is not None:
+        context_output = Path(context_output).resolve()
+        core.require(context_output != output and not context_output.exists(), 'use a distinct new context file')
     with evidence_operation():
         p = core.read(project)
         core.validate(p, project)
@@ -51,7 +71,11 @@ def prepare(project, gid, output):
         ctx = core.video_context(p, project, gid)
         core.require(ctx.get('mapping') and ctx.get('extraction'), 'current batch mapping required')
         draft = from_context(ctx)
+        # Full evidence/state context, without recycling a previous verdict as a new review.
+        ctx.pop('previous_review', None)
     core.save(output, draft)
+    if context_output is not None:
+        core.save(context_output, ctx)
     return draft
 
 
@@ -120,12 +144,13 @@ def main():
     sub = commands.add_parser('prepare')
     for field in ('project', 'group', 'output'):
         sub.add_argument(field)
+    sub.add_argument('--context-output', help='save the same full context without a second context operation')
     sub = commands.add_parser('check')
     sub.add_argument('project'); sub.add_argument('review')
     args = parser.parse_args()
     if args.command == 'prepare':
-        prepare(args.project, args.group, args.output)
-        print('draft only; observations and judgments required')
+        prepare(args.project, args.group, args.output, args.context_output)
+        print('draft only; verify frame notes and complete interpretations and judgments')
     else:
         print(json.dumps(check(args.project, core.read(args.review))))
 

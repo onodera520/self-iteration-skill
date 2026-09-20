@@ -63,8 +63,12 @@ class RepairCycleTests(fixtures.Base):
     def ready(self, verdicts=None, statuses=None, critical=True, derivable=False):
         self.p['config']['max_submissions'] = 3
         repair.baseline(self.p)
+        if verdicts is None:
+            verdicts = {'S02':'absent'}
+            if statuses is None:
+                statuses = {'S02':'absent'}
         self.mapping(statuses)
-        review = self.assessment(self.review_data(verdicts or {'S02':'FAIL'}, middle_derivable=derivable), critical)
+        review = self.assessment(self.review_data(verdicts, middle_derivable=derivable), critical)
         self.finish(review)
         d = repair.decide(self.p, self.path, 'G01')
         return d
@@ -78,10 +82,53 @@ class RepairCycleTests(fixtures.Base):
         return api, key, original, status
 
     def test_threshold_critical_cumulative_exact_and_deduplication(self):
-        for total, ids, critical, expected in [(10,['a','b'],[],True),(11,['a','b'],[],False),
-                (3,['a'],[],False),(100,['a'],['a'],True),(10,['a','a'],[],False)]:
-            with self.subTest(total=total,ids=ids,critical=critical):
-                self.assertEqual(repair.threshold(total,ids,critical)['triggered'],expected)
+        cases = [
+            (3,['a'],['a'],[],False), (3,['a','b'],['a'],[],False),
+            (14,['a','b'],['a','b'],[],False),
+            (15,['a','b','c'],[],[],True), (16,['a','b','c'],['a'],[],False),
+            (10,['a','a','b'],[],[],False), (10,['a','b','c','c'],[],[],True),
+            (100,['a'],['a'],['a'],True), (10,['a','b'],[],['a'],True),
+            (11,['a','b'],[],['a'],False), (3,['a'],[],['a'],False),
+            (100,['a','b'],['b'],['a'],True)]
+        for total, ids, critical, missing, expected in cases:
+            with self.subTest(total=total,ids=ids,critical=critical,missing=missing):
+                d = repair.threshold(total,ids,critical,missing)
+                self.assertEqual(d['triggered'],expected)
+                self.assertEqual(d['error_count'],len(set(ids)))
+                self.assertEqual(d['necessary_missing_shot_ids'],missing)
+        with self.assertRaises(ValueError):
+            repair.threshold(3,['a'],[],['b'])
+
+    def test_no_missing_failures_keep_verdict_and_block_paid_submission(self):
+        for verdicts in ({'S02':'FAIL'}, {'S01':'FAIL','S02':'FAIL'}):
+            with self.subTest(verdicts=verdicts):
+                d = self.ready(verdicts, critical=True)
+                self.assertFalse(d['triggered'])
+                self.assertEqual(d['necessary_missing_shot_ids'],[])
+                self.assertEqual(d['review_verdict'],'FAIL')
+                self.assertEqual(set(d['allowed_correction_shot_ids']),set(verdicts))
+                api = FakeWorkflow()
+                with self.assertRaisesRegex(ValueError,'threshold not reached'):
+                    repair.prepare(self.p,self.path,'G01')
+                with self.assertRaises(ValueError):
+                    repair.submit(self.p,self.path,'G01',api,True)
+                self.assertEqual(api.submissions,0)
+
+    def test_three_confirmed_failures_trigger_without_missing(self):
+        d = self.ready({'S01':'FAIL','S02':'FAIL','S03':'FAIL'},critical=False)
+        self.assertTrue(d['triggered'])
+        self.assertEqual(d['trigger'],'cumulative')
+        self.assertEqual(d['total'],3)
+        self.assertEqual(d['necessary_missing_shot_ids'],[])
+
+    def test_policy_change_invalidates_old_decision_without_new_review(self):
+        with patch.object(repair,'POLICY',1):
+            self.ready({'S02':'FAIL'})
+        with self.assertRaisesRegex(ValueError,'stale'):
+            repair.current_decision(self.p,self.path,'G01')
+        d = repair.decide(self.p,self.path,'G01')
+        self.assertEqual(d['binding']['policy'],2)
+        self.assertFalse(d['triggered'])
 
     def test_real_decision_excludes_derivable_missing_and_preserves_bad_num(self):
         self.ready({'S02':'absent'}, {'S02':'absent'}, critical=False, derivable=True)
@@ -99,6 +146,8 @@ class RepairCycleTests(fixtures.Base):
         d=repair.decide(self.p,self.path,'G01')
         self.assertEqual(d['problem_shot_ids'],['S01'])
         self.assertEqual(d['critical_shot_ids'],['S01'])
+        self.assertTrue(d['triggered'])
+        self.assertEqual(d['necessary_missing_shot_ids'],['S01'])
         self.assertEqual(self.p['aggregation']['missing_summary'][0]['bad_num'],1)
 
     def test_missing_semantic_basis_blocks_automatic_decision(self):
@@ -341,9 +390,10 @@ class RepairCycleTests(fixtures.Base):
         self.p['narrative_plan']['boundaries']=[dict(before_shot_id=s['id'],merge_allowed=True,strength=2,reason='连续行动') for s in self.p['shots'][1:]]
         self.p['narrative_plan']['safe_spans']=[dict(shot_ids=[s['id'] for s in self.p['shots']],reason='SIMULATED safe full story')]
         self.p['config']['max_submissions']=2
-        for gid in ('G01','G02'): self.mapping(gid=gid)
-        for gid,sid in [('G01','S01'),('G02','S04')]:
-            core.record_review(self.p,self.path,self.assessment(self.review_data({sid:'FAIL'},middle_derivable=False,gid=gid),True))
+        for gid,sid in [('G01','S02'),('G02','S05')]:
+            self.mapping({sid:'absent'},gid=gid)
+        for gid,sid in [('G01','S02'),('G02','S05')]:
+            core.record_review(self.p,self.path,self.assessment(self.review_data({sid:'absent'},middle_derivable=False,gid=gid),True))
         planner.store_aggregation(self.p,self.path,planner.post_review_plan(self.p,self.path,{}))
         for gid in ('G01','G02'): repair.decide(self.p,self.path,gid)
         repair.snapshot(self.p,self.path,self.path.parent/'original','original')

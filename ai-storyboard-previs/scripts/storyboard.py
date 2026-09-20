@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import sys
 from evidence_runtime import verified_read, memo_read, evidence_operation
+from validation import text, text_array
 from previs import (read, save, locked, validate, require, number, resolve, sha, digest,
                     group, current_video, group_fingerprint)
 
@@ -92,6 +93,15 @@ def current_review(p, project, sid):
                  if r["shot_id"] == sid and r["fingerprint"] == fp), None)
 
 
+def has_frame_observation(candidate):
+    """Optional neutral notes belong to one candidate, never a whole-shot summary."""
+    if not {'observation', 'visible_facts'} & candidate.keys():
+        return False
+    require(text(candidate.get('observation')) and text_array(candidate.get('visible_facts'))
+            and candidate['visible_facts'], 'candidate observation needs nonempty observation and visible_facts')
+    return True
+
+
 def record_mapping(p, project, data):
     """Agent supplies observations after inspecting frames/video, not similarity alone."""
     gid, rows = data["group_id"], data["shots"]
@@ -130,10 +140,14 @@ def record_mapping(p, project, data):
                     covered = max(covered, span[1])
                 require(covered >= evidence["duration"] - .001, "absence requires full source video coverage")
         for c in candidates:
+            noted = has_frame_observation(c)
             path = image_path(project, c["path"])
             frame = frames.get(str(path))
             require(frame and frame.get("sha256") == sha(path), "candidate not in unchanged extraction evidence")
             require(number(c.get("time")) and abs(c["time"] - frame["time"]) < .001, "candidate timestamp mismatch")
+            if noted:
+                require(c.get('sha256') == frame['sha256'] and c['time'] == frame['time'],
+                        'candidate observation needs exact current frame SHA256 and timestamp; inspect changed evidence')
             require(c["time"] > last_time, "candidate frames must follow script order; rematch or use uncertain")
             last_time = c["time"]
             c["sha256"] = sha(path)
