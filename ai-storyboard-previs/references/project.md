@@ -56,7 +56,7 @@
 - facts/state_changes/intent/omission_assessment：按 [事实规则](facts-and-planner.md)。requirements 按 [镜头要求](shot-requirements.md)，代理仅写入口种子和变化，工具计算完整状态。每镜 requirements 要求块一条 provenance，其他来源分级不变。
 - reference：保留兼容 mode: anchor|ai_fill、path、role、reason、locked。它不是新的审查结论；最终读取独立 aggregation。
 - groups：id/shot_ids/reason/version；一份输入视频对应一个来源组，列应覆盖的连续镜头。所有来源组顺序拼接必须恰好覆盖脚本一次。不得为降低漏镜占比修改应覆盖范围。
-- config：workflow: video_evidence、video_source: imported、video_input_mode: assets、delivery_mode: storyboard_images、aspect_ratio。missing_policy 可省略，默认 min_count: 2、min_ratio: 0.2；两者同时达到才建议重新生成。保留 max_repair_rounds/max_submissions/budget_cny 等安全字段。自动返修需同时达到独立阈值并有消耗 RH 币授权；不清空已有预算。可选 fixed_workflow_limits.max_duration_seconds 存已确认的工作流时长上限。
+- config：workflow: video_evidence、video_source: imported、video_input_mode: assets、delivery_mode: storyboard_images、aspect_ratio。固定工作流的新返修请求以当前来源视频的实际显示画幅覆盖本次请求参数，不回写此配置；宽高、像素比例、旋转与来源 SHA256 由工具探测并存入请求的 input_aspect，不由代理手填。missing_policy 可省略，默认 min_count: 2、min_ratio: 0.2；两者同时达到才建议重新生成。保留 max_repair_rounds/max_submissions/budget_cny 等安全字段。自动返修需同时达到独立阈值并有消耗 RH 币授权；不清空已有预算。可选 fixed_workflow_limits.max_duration_seconds 存已确认的工作流时长上限。
 - imported_videos：import-video 登记 target_id/version/source: user_video/outputs/output_hashes/group_fingerprint/duration。duration 为原视频实测范围，只用于抽帧及证据定位。独立于付费 tasks，替换视频后旧证据失效。
 - board_mappings：全组 matched/uncertain/absent，候选路径、实际时间、SHA256、observation。绑定视频、来源组及 evidence.json 哈希；完整补查确认 absent 时另填 full_rescan: true、rescan.ranges 和 rescan.observation，范围须覆盖整份实测视频。缺失镜头 candidates 为空，不能伪造对应帧。
 - map 输入可带 selections 数组，批量原子登记映射及选帧，不增加 LLM 判断。对疑似把前镜延续当独立镜头的行，明确 independent_visual_unit: false；该行不得 matched，先补查。实际不同事件可在同一连续长镜中成立，需各自可见证据，不以时间递增冒充独立镜头。

@@ -10,6 +10,7 @@ import previs as core
 import planner
 import repair_cycle as repair
 import repair_prompt
+import repair_aspect
 
 
 class FakeWorkflow:
@@ -48,6 +49,11 @@ class RepairCycleTests(fixtures.Base):
     finish = imported_fixtures.ImportedReviewTests.finish
     def setUp(self):
         imported_fixtures.ImportedReviewTests.setUp(self)
+        # Synthetic video bytes cannot be probed. The real-media tests exercise ffprobe.
+        self.aspect_probe = patch.object(repair_aspect, 'probe', return_value={
+            'streams': [dict(codec_type='video', width=1920, height=1080, sample_aspect_ratio='1:1')]})
+        self.mock_aspect_probe = self.aspect_probe.start()
+        self.addCleanup(self.aspect_probe.stop)
         self.p['repair_asset_style'] = dict(preserves_story=True, assets=[dict(
             asset_id=a['id'], sha256=core.sha(Path(a['path'])), visible_style_facts=['SIMULATED flat colour'],
             guidance='SIMULATED asset style, not real visual acceptance') for a in self.p['assets']])
@@ -516,7 +522,7 @@ class RepairCycleTests(fixtures.Base):
     def test_legacy_formats_recover_and_install_without_new_submission(self):
         self.ready()
         original = copy.deepcopy(self.p)
-        for version in (None, 0):
+        for version in (None, 0, repair_prompt.VERSION):
             with self.subTest(version=version):
                 self.p = copy.deepcopy(original)
                 request = repair._compose_prompt(self.p, self.path, 'G01', version)
@@ -553,6 +559,57 @@ class RepairCycleTests(fixtures.Base):
         Path(self.p['assets'][0]['path']).write_bytes(b'REPLACED')
         with self.assertRaises(ValueError):
             repair.validate_stored_request(self.p, self.path, task)
+
+    def test_input_portrait_overrides_config_without_mutating_project(self):
+        self.ready()
+        before = copy.deepcopy(self.p)
+        self.mock_aspect_probe.return_value = {'streams': [dict(codec_type='video', width=1080, height=1920)]}
+        request = repair.prepare(self.p, self.path, 'G01')
+        self.assertEqual(request['aspect_ratio'], '9:16')
+        self.assertIn('画幅：9:16', request['prompt'])
+        self.assertEqual(request['input_aspect']['video_sha256'], request['binding']['video_sha256'])
+        self.assertEqual(request['input_aspect']['policy'], repair_aspect.POLICY)
+        self.assertEqual(self.p, before)
+        self.mock_aspect_probe.return_value = {'streams': [dict(codec_type='video', width=1376, height=768)]}
+        following = repair.prepare(self.p, self.path, 'G01')
+        self.assertEqual(following['aspect_ratio'], '16:9')
+        self.assertEqual(self.p, before)
+
+    def test_unsupported_input_stops_before_reserving_or_submitting(self):
+        self.ready()
+        repair.snapshot(self.p, self.path, self.path.parent / 'original', 'original')
+        before = copy.deepcopy(self.p)
+        api = FakeWorkflow()
+        self.mock_aspect_probe.return_value = {'streams': [dict(codec_type='video', width=1000, height=1000)]}
+        with self.assertRaisesRegex(ValueError, 'unsupported'):
+            repair.submit(self.p, self.path, 'G01', api, True)
+        self.assertEqual(api.submissions, 0)
+        self.assertEqual(self.p, before)
+
+    def test_new_aspect_request_is_frozen_and_recovery_never_resubmits(self):
+        self.mock_aspect_probe.return_value = {'streams': [dict(codec_type='video', width=1080, height=1920)]}
+        api = FakeWorkflow()
+        api.create_error = True
+        api, key, _, status = self.start(api)
+        self.assertEqual(status, 'submission_unknown')
+        saved = copy.deepcopy(self.p['tasks'][key]['request'])
+        self.assertEqual(saved['aspect_ratio'], '9:16')
+        self.mock_aspect_probe.return_value = {'streams': [dict(codec_type='video', width=1920, height=1080)]}
+        self.assertEqual(repair.submit(self.p, self.path, 'G01', api, True), 'submission_unknown')
+        self.assertEqual(api.submissions, 1)
+        self.assertEqual(self.p['tasks'][key]['request'], saved)
+        with self.assertRaisesRegex(ValueError, 'Inputs changed'):
+            repair.validate_stored_request(self.p, self.path, self.p['tasks'][key])
+
+    def test_source_changed_during_probe_rejects_request(self):
+        self.ready()
+        _, path = core.current_video(self.p, self.path, core.group(self.p, 'G01'))
+        def replace_source(_):
+            path.write_bytes(b'REPLACED DURING PROBE')
+            return {'streams': [dict(codec_type='video', width=1920, height=1080)]}
+        self.mock_aspect_probe.side_effect = replace_source
+        with self.assertRaisesRegex(ValueError, 'changed while probing'):
+            repair.prepare(self.p, self.path, 'G01')
 
 
 if __name__=='__main__':unittest.main()

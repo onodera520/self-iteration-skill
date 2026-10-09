@@ -41,7 +41,7 @@ function Test-RepairGraph($candidate) {
     Assert-NodeMap $candidate
     $aspect = [string]$candidate.'115'.inputs.aspect_ratio
     if (($aspect -split ' ')[0] -ne $request.aspect_ratio) {
-        throw 'Requested aspect ratio differs from fixed workflow; do not alter or crop.'
+        throw 'Per-request resolution selector does not match the repair input aspect.'
     }
     if ($candidate.'115'.class_type -ne 'ResolutionSelector' -or
         $candidate.'136'.inputs.width[0] -ne '115' -or $candidate.'136'.inputs.height[0] -ne '115' -or
@@ -59,7 +59,7 @@ Set-RequestedAspect $source
 Test-RepairGraph $source
 if ($jobData.action -eq 'prepare') {
     $prepared = New-DynamicGraph $source $inputData.prompt @($inputData.paths | ForEach-Object { [IO.Path]::GetFileName($_) })
-    @{prepared=$true; submitted=$false; durationSeconds=$prepared['132']['inputs']['value']; aspectRatio=$request.aspect_ratio} |
+    @{prepared=$true; submitted=$false; durationSeconds=$prepared['132']['inputs']['value']; aspectRatio=([string]$prepared['115']['inputs']['aspect_ratio'] -split ' ')[0]} |
         ConvertTo-Json -Compress
     exit
 }

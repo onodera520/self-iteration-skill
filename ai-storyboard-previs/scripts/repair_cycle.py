@@ -9,6 +9,7 @@ import re
 import previs as core
 import planner
 import repair_prompt
+import repair_aspect
 
 POLICY = 2
 WORKFLOW = "2099403222661287938"
@@ -170,8 +171,8 @@ def asset_style(p, assets):
     return profile
 
 
-def _compose_prompt(p, project, gid, version):
-    # None/0 reproduce the two historical unversioned formats for installation only.
+def _compose_prompt(p, project, gid, version, input_aspect=False):
+    # Historical config-based requests reconstruct exactly for recovery/installation only.
     d = current_decision(p, project, gid)
     core.require(d['triggered'], 'Repair threshold not reached')
     from requirements import contexts
@@ -184,10 +185,14 @@ def _compose_prompt(p, project, gid, version):
     assets = d['binding']['assets']
     style = asset_style(p, assets)
     descriptions = {a['id']: a.get('description', '') for a in p['assets']}
+    shape = repair_aspect.source_aspect(p, project, gid, d['binding']['video_sha256']) if input_aspect else None
+    aspect = shape['aspect_ratio'] if shape else p['config'].get('aspect_ratio', '')
     lines = ['按下列完整脚本生成视频，保留镜号、镜序、剧情及必要切镜。',
              '资产图顺序：' + '；'.join(f"图{i}: {a['id']} {descriptions[a['id']]}" for i, a in enumerate(assets, 1)),
-             '画幅：' + str(p['config'].get('aspect_ratio', ''))]
+             '画幅：' + str(aspect)]
     lines.extend(baseline(p)['format_requirements'])
+    if shape:
+        lines.append(f'本次返修以输入视频画幅 {aspect} 为准；原文或固定工作流中不一致的画幅不用于本次。仅调整本次请求，不裁切输入视频。')
     lines += ['镜号对应：' + '；'.join(f"镜头{i}={s['id']}" for i, s in enumerate(ss, 1)),
               '返修快速预演每镜固定1.0秒，此处生成时长安排不改写原始脚本文字。']
     blocks, corrections = [], []
@@ -251,7 +256,9 @@ def _compose_prompt(p, project, gid, version):
                 decision_fingerprint=d['fingerprint'], binding=copy.deepcopy(d['binding']),
                 prompt='\n'.join(lines), blocks=blocks, assets=copy.deepcopy(assets),
                 asset_style=copy.deepcopy(style), previs_directive=PREVIS_DIRECTIVE,
-                duration_seconds=float(seconds), aspect_ratio=p['config'].get('aspect_ratio'))
+                duration_seconds=float(seconds), aspect_ratio=aspect)
+    if shape:
+        result['input_aspect'] = shape
     if version == repair_prompt.VERSION:
         result['prompt_version'] = version
         result['prompt_fingerprint'] = core.digest(dict(version=version, prompt=result['prompt'], blocks=blocks))
@@ -260,7 +267,7 @@ def _compose_prompt(p, project, gid, version):
 
 
 def make_prompt(p, project, gid):
-    return _compose_prompt(p, project, gid, repair_prompt.VERSION)
+    return _compose_prompt(p, project, gid, repair_prompt.VERSION, input_aspect=True)
 
 
 def validate_stored_request(p, project, task):
@@ -270,7 +277,11 @@ def validate_stored_request(p, project, task):
     gid = task['repair_source_group']
     if 'prompt_version' in request:
         core.require(request['prompt_version'] == repair_prompt.VERSION, 'Unsupported repair prompt version')
-        expected = prepare(p, project, gid)
+        if 'input_aspect' in request:
+            expected = prepare(p, project, gid)
+        else:
+            expected = _compose_prompt(p, project, gid, repair_prompt.VERSION)
+            request_limits(p, expected)
         core.require(request == expected, 'Inputs changed since submission; do not attach stale repair')
     else:
         # Reconstruct exact historical bytes/fields while still checking current evidence,
