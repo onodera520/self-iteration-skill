@@ -14,8 +14,10 @@ POLICY = 2
 WORKFLOW = "2099403222661287938"
 PREVIS_DIRECTIVE = '严格按照分镜脚本生成一段快速切镜的视频，每个分镜不需要很大的动作幅度。没有台词，没有音乐，不要出现字幕。每个分镜硬切转场。'
 DECISION_STATE = ('fingerprint', 'execution_status', 'task_key', 'automatic_allowance_used')
-DELIVERY_STAGES = ('original', 'repaired')
-DELIVERY_NAMES = {'original': '01_原视频审查.md', 'repaired': '02_返修视频审查.md'}
+DELIVERY_STAGES = ('original', 'repaired', 'repaired2', 'repaired3')
+DELIVERY_NAMES = {'original': '01_原视频审查.md', 'repaired': '02_返修视频审查.md',
+                  'repaired2': '03_返修视频审查（第二轮）.md', 'repaired3': '04_返修视频审查（第三轮）.md'}
+DELIVERY_ROUNDS = {'original': 0, 'repaired': 1, 'repaired2': 2, 'repaired3': 3}
 
 
 def lineage_tasks(p, gid, video_sha256=None):
@@ -323,10 +325,19 @@ def snapshot(p, project, out, stage):
     core.require(planner.current_aggregation(p, project), 'Current aggregation required before delivery')
     core.require(all(core.review_current(p, project, g['id']) for g in p['groups']), 'All source/boundary reviews must be current')
     if stage != 'original':
+        round_number = DELIVERY_ROUNDS[stage]
+        core.require(round_number == p.get('repair_round', 0) and
+                     round_number <= min(3, p.get('config', {}).get('max_repair_rounds', 3)),
+                     'Delivery stage must match the actual installed repair round')
         tasks = [t for t in p.get('tasks', {}).values() if t.get('repair_source_group')]
         core.require(tasks and all(t.get('installed') for t in tasks), 'Repaired video not installed; no delivery report')
+        core.require(len(tasks) >= round_number, 'No installed task evidence for this repair round')
+        latest = {}
         for t in tasks:
             gid = t['repair_source_group']
+            if gid not in latest or t.get('installed_version', 0) > latest[gid].get('installed_version', 0):
+                latest[gid] = t
+        for gid, t in latest.items():
             g = core.group(p, gid)
             current, _ = core.current_video(p, project, g)
             core.require(current and current['output_hashes'] == t['output_hashes'] and g['version'] == t['installed_version'],
@@ -343,6 +354,10 @@ def snapshot(p, project, out, stage):
         '是否自动返修由独立阈值与执行条件决定；未达阈值不代表审查通过，待检查先补证据。')
     if stage != 'original':
         text += '\n一次自动返修额度已用完；本表按新视频独立审查，仍有错误或待检查时以上述逐镜结论为准。\n'
+        if round_number > 1:
+            text += f'本表对应实际安装的第 {round_number} 轮返修；报告入口不增加付费额度。\n'
+        if round_number >= min(3, p.get('config', {}).get('max_repair_rounds', 3)):
+            text += '已达返修轮次上限；同类缺镜反复出现时，应考虑拆分提交或人工补镜，不原样重跑。\n'
     dest = out / DELIVERY_NAMES[stage]
     dest.write_text(text, encoding='utf-8')
     path.unlink()

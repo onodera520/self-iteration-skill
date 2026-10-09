@@ -371,6 +371,37 @@ class RepairCycleTests(fixtures.Base):
         with patch('media.probe',return_value={'streams':[{'codec_type':'video'}]}),patch('media.duration',return_value=6):
             repair.install(self.p,self.path,key)
 
+    def test_historical_round_reports_use_latest_bound_video_without_more_submissions(self):
+        api, key, original, _ = self.start()
+        original_hash = core.sha(Path(original))
+        repair.resume(self.p, self.path, key, api)
+        with patch('media.probe', return_value={'streams': [{'codec_type': 'video'}]}), patch('media.duration', return_value=6):
+            repair.install(self.p, self.path, key)
+        self.mapping(revision=2)
+        self.finish(self.assessment(self.review_data({'S01': 'FAIL'}, middle_derivable=False), True))
+        # Synthetic historical bookkeeping only: no second workflow execution or visual acceptance.
+        historical = copy.deepcopy(self.p['tasks'][key])
+        historical.update(id='historical', installed_version=1, output_hashes=['obsolete-output'])
+        self.p['tasks']['historical'] = historical  # Old task occurs after latest: order must not select it.
+        self.p['repair_round'] = 2
+        report = repair.snapshot(self.p, self.path, self.path.parent / 'round2', 'repaired2')
+        self.assertEqual(Path(report).name, '03_返修视频审查（第二轮）.md')
+        self.assertEqual(sum(l.startswith('| --- |') for l in Path(report).read_text(encoding='utf-8').splitlines()), 2)
+        self.assertEqual(core.sha(Path(original)), original_hash)
+        self.assertTrue(repair.decide(self.p, self.path, 'G01')['automatic_allowance_used'])
+        repair.submit(self.p, self.path, 'G01', api, True)
+        self.assertEqual(api.submissions, 1)
+        for invalid_stage in ('repaired', 'repaired3'):
+            with self.subTest(stage=invalid_stage), self.assertRaisesRegex(ValueError, 'actual installed repair round'):
+                repair.snapshot(self.p, self.path, self.path.parent / invalid_stage, invalid_stage)
+        self.p['repair_round'] = 3
+        with self.assertRaisesRegex(ValueError, 'installed task evidence'):
+            repair.snapshot(self.p, self.path, self.path.parent / 'round3', 'repaired3')
+        self.p['tasks']['historical']['installed'] = False
+        self.p['repair_round'] = 2
+        with self.assertRaisesRegex(ValueError, 'not installed'):
+            repair.snapshot(self.p, self.path, self.path.parent / 'uninstalled', 'repaired2')
+
     def test_atomic_multiple_source_install_invalidates_all_boundaries(self):
         for i,s in enumerate(copy.deepcopy(self.p['shots']),4):
             s['id']='S0'+str(i)

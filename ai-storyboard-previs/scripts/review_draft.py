@@ -58,8 +58,10 @@ def from_context(ctx, shot_ids=None):
                                  for b in ctx['boundaries']])
 
 
-def worklist(draft):
+def worklist(draft, compact=False):
     """Editable semantic fields, keyed by shot ID; evidence bindings stay in the draft."""
+    if compact:
+        return compact_worklist(draft)
     result = dict(base_digest=core.digest(draft), shots={}, evidence=[], group={})
     references = {r['shot_id']: r for r in draft['reference_assessments']}
     assessments = {r['shot_id']: r for r in draft.get('repair_assessments', [])}
@@ -82,9 +84,108 @@ def worklist(draft):
     return result
 
 
+def compact_worklist(draft):
+    """Explicit judgments plus evidence deltas; never infer PASS or a repair decision."""
+    result = worklist(draft)
+    result['format'] = 'review-worklist-2'
+    for sid, values in result['shots'].items():
+        if values['review']['verdict'] not in ('FAIL', 'absent'):
+            del values['repair']
+    result['evidence'] = []
+    for i, row in enumerate(draft['evidence'], 1):
+        value = dict(id=f'E{i:03d}', interpretation=row['interpretation'])
+        if text(row['observation']) and row['visible_facts']:
+            value['reuse_facts'] = True
+        else:
+            value.update(observation=row['observation'], visible_facts=copy.deepcopy(row['visible_facts']))
+        result['evidence'].append(value)
+    return result
+
+
+def expand_worklist(draft, edits):
+    """Resolve read-only IDs only against the exact, digest-bound source draft."""
+    core.require(set(edits) == {'format', 'base_digest', 'shots', 'evidence', 'group'} and
+                 edits['format'] == 'review-worklist-2', 'unexpected compact worklist format')
+    expected = worklist(draft)
+    core.require(isinstance(edits['shots'], dict) and set(edits['shots']) == set(expected['shots']),
+                 'worklist must cover exact shot IDs')
+    expanded = copy.deepcopy(edits)
+    del expanded['format']
+    for sid, values in expanded['shots'].items():
+        core.require(isinstance(values, dict) and isinstance(values.get('review'), dict), 'invalid shot fields: ' + sid)
+        problem = values['review'].get('verdict') in ('FAIL', 'absent')
+        core.require(set(values) == ({'review', 'reference', 'repair'} if problem else {'review', 'reference'}),
+                     'FAIL/absent require repair; non-problem shots omit repair: ' + sid)
+        if not problem:
+            values['repair'] = copy.deepcopy(expected['shots'][sid]['repair'])
+    rows = edits['evidence']
+    ids = [f'E{i:03d}' for i in range(1, len(draft['evidence']) + 1)]
+    core.require(isinstance(rows, list) and all(isinstance(r, dict) for r in rows) and
+                 len(rows) == len(ids) and {r.get('id') for r in rows} == set(ids),
+                 'evidence IDs must cover exact draft evidence once')
+    originals = dict(zip(ids, draft['evidence']))
+    expanded['evidence'] = []
+    for row in rows:
+        original = originals[row['id']]
+        value = {k: copy.deepcopy(original[k]) for k in ('shot_id', 'sha256', 'time')}
+        if 'reuse_facts' in row:
+            core.require(set(row) == {'id', 'reuse_facts', 'interpretation'} and row['reuse_facts'] is True and
+                         text(original['observation']) and bool(original['visible_facts']),
+                         'reuse_facts requires recorded single-frame facts; do not rebind evidence')
+            value.update(observation=original['observation'], visible_facts=copy.deepcopy(original['visible_facts']))
+        else:
+            core.require(set(row) == {'id', 'observation', 'visible_facts', 'interpretation'}, 'unexpected evidence delta fields')
+            value.update(observation=row['observation'], visible_facts=copy.deepcopy(row['visible_facts']))
+        value['interpretation'] = row['interpretation']
+        expanded['evidence'].append(value)
+    return expanded
+
+
+def agent_view(ctx, context_file):
+    """Normalize repeated frame bindings; keep every frame, candidate, state and boundary."""
+    result = {k: copy.deepcopy(v) for k, v in ctx.items()
+              if k not in ('previous_review', 'shots', 'mapping', 'extraction', 'boundaries', 'context_fingerprint')}
+    result.update(format='review-view-1', context_fingerprint=ctx['context_fingerprint'],
+                  full_context_file=str(Path(context_file).resolve()))
+    frames = ctx['extraction']['frames']
+    index = {(f['sha256'], f['time']): f'F{i:03d}' for i, f in enumerate(frames, 1)}
+    core.require(len(index) == len(frames), 'duplicate frame binding in context')
+    # Full SHA256 values remain in the frozen full context and draft; short IDs are reading aids.
+    result['frames'] = [dict(id=index[f['sha256'], f['time']], **copy.deepcopy({k: v for k, v in f.items() if k != 'sha256'}))
+                        for f in frames]
+    result['extraction'] = {k: copy.deepcopy(v) for k, v in ctx['extraction'].items() if k != 'frames'}
+
+    def selected(value):
+        if not value:
+            return None
+        key = value['sha256'], value['source']['time']
+        core.require(key in index, 'selected frame must belong to current extraction')
+        return dict(frame_id=index[key], **copy.deepcopy({k: v for k, v in value.items()
+                                                        if k not in ('path', 'sha256')}))
+
+    result['shots'] = []
+    for shot in ctx['shots']:
+        row = copy.deepcopy(shot)
+        row['selected_frame'] = selected(shot['selected_frame'])
+        result['shots'].append(row)
+    result['mapping'] = copy.deepcopy(ctx['mapping'])
+    for row in result['mapping']['shots']:
+        row['candidates'] = [dict(frame_id=index[c['sha256'], c['time']],
+                                  **{k: v for k, v in c.items() if k not in ('path', 'sha256', 'time')})
+                             for c in row['candidates']]
+    # Boundary frames belong to other source videos; retain their complete independent bindings.
+    result['boundaries'] = copy.deepcopy(ctx['boundaries'])
+    result['evidence_ids'] = [dict(id=f'E{i:03d}', shot_id=e['shot_id'], frame_id=index[e['sha256'], e['time']])
+                              for i, e in enumerate(from_context(ctx)['evidence'], 1)]
+    result['view_digest'] = core.digest(result)
+    return result
+
+
 def fill(draft, edits):
     """Merge an explicit worklist, never rebind timestamps, hashes, or context."""
     core.require(edits.get('base_digest') == core.digest(draft), 'stale worklist; use the exact source draft')
+    if 'format' in edits:
+        edits = expand_worklist(draft, edits)
     expected = worklist(draft)
     core.require(set(edits) == set(expected) and set(edits['shots']) == set(expected['shots']), 'worklist must cover exact shot IDs')
     result = copy.deepcopy(draft)
@@ -118,7 +219,7 @@ def fill(draft, edits):
     return result
 
 
-def prepare(project, gid, output, context_output=None, worklist_output=None):
+def prepare(project, gid, output, context_output=None, worklist_output=None, view_output=None, compact=False):
     output = Path(output).resolve()
     core.require(not output.exists(), 'use a new draft file; existing judgments must not be overwritten')
     if context_output is not None:
@@ -127,6 +228,11 @@ def prepare(project, gid, output, context_output=None, worklist_output=None):
     if worklist_output is not None:
         worklist_output = Path(worklist_output).resolve()
         core.require(worklist_output not in (output, context_output) and not worklist_output.exists(), 'use a distinct new worklist file')
+    if view_output is not None:
+        view_output = Path(view_output).resolve()
+        core.require(context_output is not None, 'view requires a frozen full context file')
+        core.require(view_output not in (output, context_output, worklist_output) and not view_output.exists(),
+                     'use a distinct new view file')
     with evidence_operation():
         p = core.read(project)
         core.validate(p, project)
@@ -136,11 +242,14 @@ def prepare(project, gid, output, context_output=None, worklist_output=None):
         draft = from_context(ctx)
         # Full evidence/state context, without recycling a previous verdict as a new review.
         ctx.pop('previous_review', None)
+        view = agent_view(ctx, context_output) if view_output is not None else None
     core.save(output, draft)
     if context_output is not None:
         core.save(context_output, ctx)
     if worklist_output is not None:
-        core.save(worklist_output, worklist(draft))
+        core.save(worklist_output, worklist(draft, compact=compact))
+    if view_output is not None:
+        core.save(view_output, view)
     return draft
 
 
@@ -215,6 +324,8 @@ def main():
         sub.add_argument(field)
     sub.add_argument('--context-output', help='save the same full context without a second context operation')
     sub.add_argument('--worklist-output', help='save editable semantic fields keyed by shot ID')
+    sub.add_argument('--view-output', help='save normalized agent reading view; requires --context-output')
+    sub.add_argument('--legacy-worklist', action='store_true', help='write the previous full semantic form instead of evidence deltas')
     sub = commands.add_parser('check')
     sub.add_argument('project'); sub.add_argument('review')
     sub.add_argument('--delivery-only', action='store_true', help='legacy review only; not repair readiness')
@@ -223,7 +334,8 @@ def main():
         sub.add_argument(field)
     args = parser.parse_args()
     if args.command == 'prepare':
-        prepare(args.project, args.group, args.output, args.context_output, args.worklist_output)
+        prepare(args.project, args.group, args.output, args.context_output, args.worklist_output,
+                args.view_output, compact=not args.legacy_worklist)
         print('draft only; verify frame notes and complete interpretations and judgments')
     elif args.command == 'fill':
         core.require(not Path(args.output).exists(), 'use a new completed draft file')

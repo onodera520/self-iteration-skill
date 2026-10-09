@@ -28,7 +28,7 @@
 
 准备入口持有同一 `.lock`，任一步失败立即停止，成功保存的前序阶段保留。它显式拦截 missing_assets，并重新核对全部资产文件；首轮还没有抽帧时 missing_anchors 是预期情况，不当作已通过画面。EVIDENCE_DIR 和 PREPARE_INTERNAL_DIR 必须是互不嵌套的新目录。内部 PREPARE_REPORT.json 记录失败阶段和机械耗时；失败后先修正原因，再换新目录重跑，当前视频路径、版本、组指纹及哈希仍一致才复用已有登记，baseline 不可改写。此入口不执行匹配、审查、生成或付费，也不改变脚本和采样策略。
 
-`repair_asset_style` 是看过真实资产后填写的准备数据，基础模板不伪造 SHA256。仅校对的旧项目可省略；一旦填写就提前检查格式，进入返修提示词前仍须检查完整资产覆盖及当前哈希。精确片段如下（sha256 必须替换为工具实测值）：
+`repair_asset_style` 是返修专用的资产风格数据，所有默认校对项目都可延后准备，基础模板不伪造 SHA256。完整脚本、shot_design 和原文基线仍在准备阶段整理并冻结；普通审查使用资产描述及真实帧事实。触发返修且已有付费授权时，利用原图或有效中性观察一次补齐风格数据，重新运行 decide 绑定当前风格后才生成 prompt；不得改写冻结基线。一旦填写仍检查格式，提交前仍核对完整资产覆盖及当前哈希。精确片段如下（sha256 必须替换为工具实测值）：
 
 ```json
 {
@@ -69,7 +69,11 @@
 - tasks/repairs/repair_round：保留旧生成与新增固定工作流返修记录，不清空历史绕过安全限制。user_video_prompt 为旧生成模式字段，默认不需要。
 - repair_baseline / repair_decisions / repair_deliveries：冻结脚本原文、独立机读判定、原视频与一次返修各自不可覆盖的交付快照。repair_assessments 在原有组级审查内记录，repair policy=2 与脚本/资产/视频/审查/聚合指纹绑定，详见 [自动返修](auto-repair.md)。video_format_requirements 可选，须为 source_script 中全局格式要求的逐字摘录。
 
-- shots[].shot_design：一次整理从脚本摘取的镜头设计，与原文一并冻结；缺省只用已有景别或标未指定，不新增机位。repair_asset_style：按原资产顺序保存 asset_id、sha256、visible_style_facts、guidance 和 preserves_story，绑定返修判定；详见 [受控提示词](auto-repair.md#受控提示词)。返修每镜固定 1.0s、总长为来源镜数 ×1 秒，含漏镜和 ai_fill；不覆盖原脚本 duration 或改变两表计划时长。内部请求 prompt_version=2；blocks.text 保留冻结原文，generation_text 仅为确定性派生正文，不写回脚本。prompt_fingerprint 绑定版本、提示词与逐镜块；生成时长标签为【生成时长】，原头部计划时长不嵌套进正文。旧请求恢复和文件保留见自动返修。末尾固定预演段与资产风格均不可由临时请求覆盖。
+- shots[].shot_design：一次整理从脚本摘取的镜头设计，与原文一并冻结；缺省只用已有景别或标未指定，不新增机位。repair_asset_style：实际返修前按原资产顺序保存 asset_id、sha256、visible_style_facts、guidance 和 preserves_story，重新绑定返修判定；普通审查不提前要求此专用表单。详见 [受控提示词](auto-repair.md#受控提示词)。返修每镜固定 1.0s、总长为来源镜数 ×1 秒，含漏镜和 ai_fill；不覆盖原脚本 duration 或改变两表计划时长。内部请求 prompt_version=2；blocks.text 保留冻结原文，generation_text 仅为确定性派生正文，不写回脚本。prompt_fingerprint 绑定版本、提示词与逐镜块；生成时长标签为【生成时长】，原头部计划时长不嵌套进正文。旧请求恢复和文件保留见自动返修。末尾固定预演段与资产风格均不可由临时请求覆盖。
+
+## 精简审查文件
+
+review_draft.py prepare 一次输出完整 CONTEXT.json、REVIEW_DRAFT.json、只读 REVIEW_VIEW.json 和精简 WORKLIST.json。精简视图仍覆盖全部候选、连续帧、要求、资产、完整计算状态及左右边界；F 编号集中索引帧，E 编号索引草稿证据，详细 SHA256 保留在完整文件。工作单 format: review-worklist-2 与 base_digest 绑定固定草稿，只填明确判断及事实增量；FAIL/absent 的返修依据不能省。fill 由原草稿恢复完整绑定，走原完整校验，仍须 review 登记。编号或省略空模板不改变 review_schema/reference_policy_version，旧完整工作单兼容。详细约定见 [执行提效](efficiency.md#工作清单与协调草稿)。
 
 ## 资产审查证据版本
 
