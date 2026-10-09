@@ -1,5 +1,6 @@
 """Text-only regression examples; these cannot establish video-model compliance."""
 import copy
+import hashlib
 import json
 from pathlib import Path
 import unittest
@@ -53,6 +54,56 @@ class GenerationViewTests(unittest.TestCase):
             prompt.input_views(shots, originals, requirements, {'S01':1, 'S02':2})
         for text in ('S01:', 'S02:', 'provisional', 'phase'):
             self.assertIn(text, str(caught.exception))
+
+
+class VisualOnlyTests(unittest.TestCase):
+    @staticmethod
+    def adaptation(source, visual='她皱眉，随后推门。'):
+        return dict(source_sha256=hashlib.sha256(source.encode('utf-8')).hexdigest(),
+                    visual_text=visual, preserves_story=True, story_basis='原脚本已有皱眉与推门；通过这些动作承接剧情。')
+
+    def test_visual_view_keeps_actions_without_rewriting_source(self):
+        source = '她皱眉，开口问 {谁？}，随后推门。'
+        row = self.adaptation(source)
+        view = prompt.VisualOnly({'S01.generation_text': row})
+        self.assertEqual(view.text('S01.generation_text', source), '她皱眉，随后推门。')
+        view.finish()
+        self.assertIn('开口问 {谁？}', source)
+        self.assertEqual(view.used['S01.generation_text'], row)
+        self.assertEqual(view.text('S01.design', '近景，等3秒后推近。'), '近景，等3秒后推近。')
+
+    def test_missing_adaptations_report_every_dynamic_field(self):
+        view = prompt.VisualOnly({})
+        for path in ('S01.generation_text', 'S01.design', 'S01.correction', 'S01.must_have.0',
+                     'S01.must_not_have.0', 'S01.keyframe_target.description', 'S01.critical_changes.0',
+                     'asset.A01.description', 'asset.A01.guidance', 'format.0'):
+            view.text(path, '她低语 {回来。}')
+        with self.assertRaises(ValueError) as caught:
+            view.finish()
+        self.assertEqual(str(caught.exception).count('visual adaptation required'), 10)
+
+    def test_stale_empty_risky_or_ungrounded_adaptation_rejected(self):
+        source = '她开口问 {谁？}，随后推门。'
+        for changes in (dict(source_sha256='0'*64), dict(visual_text=''),
+                        dict(visual_text='她说 {别动。}'), dict(visual_text='内心OS：别动'),
+                        dict(visual_text='响起雨声'), dict(story_basis=''), dict(preserves_story=False)):
+            with self.subTest(changes=changes):
+                row = dict(self.adaptation(source), **changes)
+                view = prompt.VisualOnly({'S01.generation_text': row})
+                view.text('S01.generation_text', source)
+                with self.assertRaises(ValueError):
+                    view.finish()
+
+    def test_visual_source_cannot_be_rewritten_and_prohibitions_are_not_speech(self):
+        source = '他转身，望向写有“入口”的木牌。'
+        view = prompt.VisualOnly({'S01.generation_text': self.adaptation(source)})
+        self.assertEqual(view.text('S01.generation_text', source), source)
+        with self.assertRaisesRegex(ValueError, 'must remain unchanged'):
+            view.finish()
+        self.assertEqual(prompt.speech_signals('没有台词，没有音乐，不要出现字幕。'), [])
+        self.assertEqual(prompt.speech_signals(source), [])
+        for text in ('她说“别走”', '他开口', '内心OS {等3秒。}', '他对她说：别走', 'voiceover: hello'):
+            self.assertTrue(prompt.speech_signals(text), text)
 
 
 if __name__ == '__main__':

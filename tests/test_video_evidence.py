@@ -142,7 +142,8 @@ class VideoEvidenceTests(fixtures.Base):
                 self.assertEqual(proposal["decisions"][1]["mode"], "pending")
                 report = Path(boards.render(self.p, self.path, self.path.parent / ("report-" + status))).read_text(encoding="utf-8")
                 row = next(line for line in report.splitlines() if "| S03 |" in line)
-                self.assertIn("| 待检查 |" if status == "uncertain" else "| 需要重新生成 |", row)
+                self.assertIn("| — |" if status == "uncertain" else "| 需要重新生成 |", row)
+                self.assertNotIn("待检查", report)
                 if status == "uncertain":
                     with self.assertRaisesRegex(ValueError, "confirmed FAIL"):
                         core.repair(self.p, self.path, ["G01"], "not authorized by uncertain")
@@ -167,7 +168,10 @@ class VideoEvidenceTests(fixtures.Base):
         self.assertIsNone(boards.current_mapping(self.p, self.path, "G01"))
         self.assertTrue(all(boards.current_frame(self.p, self.path, sid) is None for sid in ("S01", "S02", "S03")))
         old_output = Path(boards.render(self.p, self.path, self.path.parent / "pending")).read_text(encoding="utf8")
-        self.assertIn("待检查", old_output)
+        self.assertIn("| — | 暂不省图 |", old_output)
+        self.assertIn("缺少当前有效审查", old_output)
+        self.assertNotIn("待检查", old_output)
+        self.assertNotIn("检验通过", old_output)
         self.assertNotIn("**ai_fill", old_output)
         self.mapping()
         self.assertIsNone(core.review_current(self.p, self.path, "G01"))

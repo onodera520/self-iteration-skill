@@ -1,5 +1,6 @@
 """Simulated judgments/transport, not real visual or paid-workflow acceptance."""
 import copy
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 import unittest
@@ -253,7 +254,8 @@ class RepairCycleTests(fixtures.Base):
         request=repair.prepare(self.p,self.path,'G01')
         self.assertEqual(request['prompt'].count(repair.PREVIS_DIRECTIVE),1)
         self.assertGreater(request['prompt'].index(repair.PREVIS_DIRECTIVE),request['prompt'].index('镜头3,【生成时长】'))
-        self.assertTrue(request['prompt'].endswith(self.p['repair_asset_style']['assets'][-1]['guidance']))
+        self.assertTrue(request['prompt'].startswith(repair_prompt.SILENT_DIRECTIVE+'\n'))
+        self.assertTrue(request['prompt'].endswith(repair_prompt.SILENT_DIRECTIVE))
         bad=copy.deepcopy(request)
         bad['prompt']=bad['prompt'].replace(repair.PREVIS_DIRECTIVE,'允许音乐和字幕')
         with self.assertRaises(ValueError):repair.prepare(self.p,self.path,'G01',bad)
@@ -448,26 +450,125 @@ class RepairCycleTests(fixtures.Base):
         self.assertTrue(all(core.review_current(self.p,self.path,gid) is None for gid in ('G01','G02')))
         self.assertEqual(api.submissions,2)
 
-    def test_full_headers_render_once_without_changing_baseline_or_dialogue(self):
+    def test_full_headers_visual_adaptation_preserves_frozen_dialogue_and_actions(self):
         bodies = [s['script'] for s in self.p['shots']]
         bodies[1] += '\n内心OS {等3秒再走。}，随后抬头。'
         for i, (shot, body) in enumerate(zip(self.p['shots'], bodies), 1):
             shot['script'] = f'镜头{i}，【时长】{i+1}s，【镜头设计】近景，侧面平视。\n【镜头内容】{body}'
         self.p['source_script'] = '\n'.join(s['script'] for s in self.p['shots'])
         self.ready()
+        visual_body = bodies[1].split('\n内心OS', 1)[0] + '，随后抬头。'
+        self.p['repair_visual_adaptations'] = {'S02.generation_text': dict(
+            source_sha256=hashlib.sha256(bodies[1].encode('utf-8')).hexdigest(),
+            visual_text=visual_body, preserves_story=True, story_basis='保留原有动作与随后抬头，不输出内心声音。')}
         before = copy.deepcopy(self.p)
         request = repair.prepare(self.p, self.path, 'G01')
         self.assertEqual(self.p, before)
-        self.assertEqual([b['generation_text'] for b in request['blocks']], bodies)
+        self.assertEqual([b['generation_text'] for b in request['blocks']], [bodies[0], visual_body, bodies[2]])
         self.assertEqual([b['text'] for b in request['blocks']], [s['script'] for s in self.p['shots']])
         self.assertEqual([b['design'] for b in request['blocks']], ['近景，侧面平视']*3)
         for tag in ('【生成时长】', '【镜头设计】', '【镜头内容】'):
             self.assertEqual(request['prompt'].count(tag), 3)
         self.assertNotIn('【时长】', request['prompt'])
-        self.assertIn('内心OS {等3秒再走。}，随后抬头。', request['prompt'])
+        self.assertNotIn('等3秒再走', request['prompt'])
+        self.assertIn('内心OS {等3秒再走。}', request['blocks'][1]['text'])
+        self.assertIn('随后抬头', request['prompt'])
         self.assertEqual(request['prompt_version'], repair_prompt.VERSION)
         self.assertEqual(request['prompt_fingerprint'], core.digest(dict(
             version=repair_prompt.VERSION, prompt=request['prompt'], blocks=request['blocks'])))
+
+    def test_dialogue_leaks_block_submission_and_adaptations_are_frozen(self):
+        original_text = '她皱眉，开口问 {谁？}，随后推门。'
+        self.p['shots'][0]['script'] = original_text
+        self.p['source_script'] = '\n'.join(s['script'] for s in self.p['shots'])
+        self.ready()
+        api = FakeWorkflow()
+        with self.assertRaisesRegex(ValueError, 'S01.generation_text: visual adaptation required'):
+            repair.submit(self.p, self.path, 'G01', api, True)
+        self.assertEqual(api.submissions, 0)
+        self.assertEqual(self.p.get('tasks', {}), {})
+        self.p['repair_visual_adaptations'] = {'S01.generation_text': dict(
+            source_sha256=hashlib.sha256(original_text.encode('utf-8')).hexdigest(),
+            visual_text='她皱眉，随后推门。', preserves_story=True, story_basis='保持原脚本皱眉和推门，问话只作为内部剧情信息。')}
+        request = repair.prepare(self.p, self.path, 'G01')
+        self.assertNotIn('谁？', request['prompt'])
+        self.assertEqual(request['blocks'][0]['text'], original_text)
+        task = dict(repair_source_group='G01', request=request, fingerprint=core.digest(request))
+        repair.validate_stored_request(self.p, self.path, task)
+        self.p['repair_visual_adaptations']['S01.generation_text']['visual_text'] = '她皱眉。'
+        with self.assertRaisesRegex(ValueError, 'Inputs changed'):
+            repair.validate_stored_request(self.p, self.path, task)
+
+    def test_legacy_v2_dialogue_request_recovers_without_visual_adaptation(self):
+        self.p['shots'][0]['script'] += '，开口问 {谁？}'
+        self.p['source_script'] = '\n'.join(s['script'] for s in self.p['shots'])
+        self.ready()
+        for input_aspect in (False, True):
+            with self.subTest(input_aspect=input_aspect):
+                request = repair._compose_prompt(self.p, self.path, 'G01', 2, input_aspect=input_aspect)
+                self.assertIn('开口问 {谁？}', request['prompt'])
+                task = dict(repair_source_group='G01', request=request, fingerprint=core.digest(request))
+                repair.validate_stored_request(self.p, self.path, task)
+                with self.assertRaises(ValueError):
+                    repair.prepare(self.p, self.path, 'G01', request)
+
+    def test_final_prompt_guard_rejects_leaks_outside_shot_body(self):
+        self.ready()
+        request = repair.prepare(self.p, self.path, 'G01')
+        for text in ('图1：配音响起。', '【本镜必须出现】他说 {别走。}', '内心VO：现在离开。'):
+            bad = copy.deepcopy(request)
+            bad['prompt'] = bad['prompt'].replace('【原始资产风格】', text+'\n【原始资产风格】')
+            with self.assertRaisesRegex(ValueError, 'speech/audio/text leaked'):
+                repair_prompt.validate(bad, ['S01', 'S02', 'S03'])
+
+    def test_composition_routes_all_dynamic_sources_through_visual_gate(self):
+        # Isolate assembly wiring from the already-tested source/review binding gates.
+        from requirements import contexts
+        self.ready()
+        original = copy.deepcopy(repair.baseline(self.p))
+        decision = copy.deepcopy(repair.current_decision(self.p, self.path, 'G01'))
+        resolved = contexts(self.p)
+        asset_id = self.p['assets'][0]['id']
+        sources = {
+            'S01.generation_text': ('她皱眉，开口问 {谁？}，随后推门。', '她皱眉，随后推门。'),
+            'S01.design': ('近景，开口问 {谁？}', '近景'),
+            'S02.correction': ('她抬头，开口问 {谁？}', '她抬头'),
+            'S01.must_have.0': ('她举灯，开口问 {谁？}', '她举灯'),
+            'S01.must_not_have.0': ('她离开时开口问 {谁？}', '她离开'),
+            'S01.keyframe_target.description': ('她看门口，开口问 {谁？}', '她看门口'),
+            'S01.critical_changes.0': ('girl.action 由 站立 变为 开口问 {谁？}', 'girl.action 由 站立 变为 看向门口'),
+            f'asset.{asset_id}.description': ('素衣女孩，开口问 {谁？}', '素衣女孩'),
+            f'asset.{asset_id}.guidance': ('写实人物，开口问 {谁？}', '写实人物'),
+            'format.0': ('写实画面，开口问 {谁？}', '写实画面')}
+        original['shots'][0].update(text=sources['S01.generation_text'][0], design=sources['S01.design'][0])
+        original['format_requirements'] = [sources['format.0'][0]]
+        decision['assessments'][0]['correction'] = sources['S02.correction'][0]
+        resolved['S01'].update(must_have=[sources['S01.must_have.0'][0]],
+            must_not_have=[sources['S01.must_not_have.0'][0]],
+            keyframe=dict(phase='action', description=sources['S01.keyframe_target.description'][0]))
+        self.p['shots'][0]['state_changes'] = [dict(entity='girl', attribute='action', before='站立',
+            after='开口问 {谁？}', authorized=True, critical=True)]
+        self.p['assets'][0]['description'] = sources[f'asset.{asset_id}.description'][0]
+        self.p['repair_asset_style']['assets'][0]['guidance'] = sources[f'asset.{asset_id}.guidance'][0]
+        with patch.object(repair, 'baseline', return_value=original), \
+             patch.object(repair, 'current_decision', return_value=decision), \
+             patch('requirements.contexts', return_value=resolved):
+            with self.assertRaises(ValueError) as caught:
+                repair._compose_prompt(self.p, self.path, 'G01', repair_prompt.VERSION)
+            for path in sources:
+                self.assertIn(path + ': visual adaptation required', str(caught.exception))
+            self.p['repair_visual_adaptations'] = {path: dict(
+                source_sha256=hashlib.sha256(source.encode('utf-8')).hexdigest(), visual_text=visual,
+                preserves_story=True, story_basis='SIMULATED grounded visual adaptation, not visual acceptance')
+                for path, (source, visual) in sources.items()}
+            before = copy.deepcopy(self.p)
+            request = repair._compose_prompt(self.p, self.path, 'G01', repair_prompt.VERSION)
+        self.assertEqual(self.p, before)
+        self.assertEqual(set(request['visual_adaptations']), set(sources))
+        self.assertNotIn('谁？', request['prompt'])
+        self.assertEqual(request['blocks'][0]['text'], sources['S01.generation_text'][0])
+        for _, visual in sources.values():
+            self.assertIn(visual, request['prompt'])
 
     def test_collect_all_malformed_original_headers_and_block_before_submit(self):
         for shot in self.p['shots'][:2]:
@@ -522,7 +623,7 @@ class RepairCycleTests(fixtures.Base):
     def test_legacy_formats_recover_and_install_without_new_submission(self):
         self.ready()
         original = copy.deepcopy(self.p)
-        for version in (None, 0, repair_prompt.VERSION):
+        for version in (None, 0, 2, repair_prompt.VERSION):
             with self.subTest(version=version):
                 self.p = copy.deepcopy(original)
                 request = repair._compose_prompt(self.p, self.path, 'G01', version)

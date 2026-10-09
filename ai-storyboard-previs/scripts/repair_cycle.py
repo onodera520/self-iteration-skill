@@ -181,16 +181,21 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
     assessment = {s['shot_id']: s for s in d['assessments']}
     ss = core.shots(p, core.group(p, gid))
     views = repair_prompt.input_views(ss, original, resolved,
-        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version == repair_prompt.VERSION else {}
+        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version in (2, repair_prompt.VERSION) else {}
+    visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {})) if version == repair_prompt.VERSION else None
+    def render_text(path, text):
+        return visual.text(path, text) if visual else text
     assets = d['binding']['assets']
     style = asset_style(p, assets)
     descriptions = {a['id']: a.get('description', '') for a in p['assets']}
     shape = repair_aspect.source_aspect(p, project, gid, d['binding']['video_sha256']) if input_aspect else None
     aspect = shape['aspect_ratio'] if shape else p['config'].get('aspect_ratio', '')
     lines = ['按下列完整脚本生成视频，保留镜号、镜序、剧情及必要切镜。',
-             '资产图顺序：' + '；'.join(f"图{i}: {a['id']} {descriptions[a['id']]}" for i, a in enumerate(assets, 1)),
+             '资产图顺序：' + '；'.join(f"图{i}: {a['id']} {render_text('asset.' + a['id'] + '.description', descriptions[a['id']])}" for i, a in enumerate(assets, 1)),
              '画幅：' + str(aspect)]
-    lines.extend(baseline(p)['format_requirements'])
+    if visual:
+        lines.insert(0, repair_prompt.SILENT_DIRECTIVE)
+    lines.extend(render_text(f'format.{i}', text) for i, text in enumerate(baseline(p)['format_requirements']))
     if shape:
         lines.append(f'本次返修以输入视频画幅 {aspect} 为准；原文或固定工作流中不一致的画幅不用于本次。仅调整本次请求，不裁切输入视频。')
     lines += ['镜号对应：' + '；'.join(f"镜头{i}={s['id']}" for i, s in enumerate(ss, 1)),
@@ -220,12 +225,25 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
             block['keyframe_target'] = dict(phase=frame['phase'], description=frame['description'])
         if changes:
             block['critical_changes'] = changes
+        if visual:
+            sid = s['id']
+            for name in ('design', 'generation_text', 'correction'):
+                if name in block:
+                    block[name] = render_text(f'{sid}.{name}', block[name])
+            for name in ('must_have', 'must_not_have', 'critical_changes'):
+                if name in block:
+                    block[name] = [render_text(f'{sid}.{name}.{j}', value) for j, value in enumerate(block[name])]
+            if 'keyframe_target' in block:
+                target = block['keyframe_target']
+                target['description'] = render_text(f'{sid}.keyframe_target.description', target['description'])
+            must, must_not, changes = (block.get(name, []) for name in ('must_have', 'must_not_have', 'critical_changes'))
         blocks.append(block)
         duration_tag = '生成时长' if views else '时长'
         line = f"镜头{i},【{duration_tag}】1.0s。【镜头设计】{block['design']}。【镜头内容】{block.get('generation_text', block['text'])}"
         if 'keyframe_target' in block:
-            phase = {'entry': '起态', 'action': '动作中', 'exit': '终态'}[frame['phase']]
-            line += f"【目标静帧】{phase}：{frame['description']}。以下必须/不得出现仅约束该时刻，完整动作仍按原脚本先后呈现。"
+            target = block['keyframe_target']
+            phase = {'entry': '起态', 'action': '动作中', 'exit': '终态'}[target['phase']]
+            line += f"【目标静帧】{phase}：{target['description']}。以下必须/不得出现仅约束该时刻，完整动作仍按原脚本先后呈现。"
         if must:
             line += '【本镜必须出现】' + '；'.join(must)
         if must_not:
@@ -236,7 +254,8 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
             line += '【仅本镜返修补充】' + block['correction']
         lines += [line]
     lines += ['\n【固定预演要求】', PREVIS_DIRECTIVE,
-              '小幅运动仍须清楚呈现原脚本的关键动作和结果。对白、OS、VO仅用于理解剧情，不输出声音或屏幕文字。']
+              ('小幅运动仍须清楚呈现原脚本的关键动作和结果，保留所有镜头与硬切。' if visual else
+               '小幅运动仍须清楚呈现原脚本的关键动作和结果。对白、OS、VO仅用于理解剧情，不输出声音或屏幕文字。')]
     if corrections:
         correction_label = ('以下镜头在上一次生成中缺失或未被独立呈现，必须各自单独成一个硬切镜头，不得省略、不得与相邻镜合并：'
             if version == 0 else '以下为本次需修正或补齐的镜头，必须各自单独成一个硬切镜头，不得省略、不得与相邻镜合并：')
@@ -250,7 +269,10 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
                 if ids:
                     lines.append(label + '、'.join(f'镜头{i}={sid}' for i, sid in ids))
     lines += ['【原始资产风格】', '以下风格仅约束视觉表现，不改变原脚本人物关系、动作、场景与时空；资产展示背景不替代剧情背景。']
-    lines.extend(f"图{i}（{row['asset_id']}）：{row['guidance']}" for i, row in enumerate(style['assets'], 1))
+    lines.extend(f"图{i}（{row['asset_id']}）：{render_text('asset.' + row['asset_id'] + '.guidance', row['guidance'])}" for i, row in enumerate(style['assets'], 1))
+    if visual:
+        visual.finish()
+        lines.append(repair_prompt.SILENT_DIRECTIVE)
     seconds = len(ss)
     result = dict(workflow_id=WORKFLOW, instance_type='plus', source_group_id=gid,
                 decision_fingerprint=d['fingerprint'], binding=copy.deepcopy(d['binding']),
@@ -259,8 +281,10 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
                 duration_seconds=float(seconds), aspect_ratio=aspect)
     if shape:
         result['input_aspect'] = shape
-    if version == repair_prompt.VERSION:
+    if version in (2, repair_prompt.VERSION):
         result['prompt_version'] = version
+        if visual:
+            result['visual_adaptations'] = visual.used
         result['prompt_fingerprint'] = core.digest(dict(version=version, prompt=result['prompt'], blocks=blocks))
         repair_prompt.validate(result, [s['id'] for s in ss])
     return result
@@ -276,12 +300,10 @@ def validate_stored_request(p, project, task):
     core.require(task['fingerprint'] == core.digest(request), 'Invalid stored repair request')
     gid = task['repair_source_group']
     if 'prompt_version' in request:
-        core.require(request['prompt_version'] == repair_prompt.VERSION, 'Unsupported repair prompt version')
-        if 'input_aspect' in request:
-            expected = prepare(p, project, gid)
-        else:
-            expected = _compose_prompt(p, project, gid, repair_prompt.VERSION)
-            request_limits(p, expected)
+        version = request['prompt_version']
+        core.require(version in (2, repair_prompt.VERSION), 'Unsupported repair prompt version')
+        expected = _compose_prompt(p, project, gid, version, input_aspect='input_aspect' in request)
+        request_limits(p, expected)
         core.require(request == expected, 'Inputs changed since submission; do not attach stale repair')
     else:
         # Reconstruct exact historical bytes/fields while still checking current evidence,

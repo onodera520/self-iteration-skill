@@ -418,6 +418,31 @@ def text_only_fill(decision):
     return decision.get("mode") == "ai_fill" and decision.get("mapping_status") == "absent"
 
 
+def delivery_note(decision, review, sid, issues):
+    """Show actionable findings once; keep full evidence and uncertainty in the project."""
+    def join(parts):
+        cleaned = (" ".join(str(part).split()).replace("待检查", "需补证据").strip("；。 ")
+                   for part in parts if part)
+        return "；".join(dict.fromkeys(part for part in cleaned if part))
+
+    row = next((r for r in (review or {}).get("shot_reviews", []) if r["shot_id"] == sid), {})
+    if decision.get("status") == "pending" and decision.get("review_verdict") == "absent":
+        return join(["省图依据不足", decision.get("reason")])
+    if issues:
+        parts = [join([i["problem"], i["fix"]]) for i in issues]
+        if row.get("verdict") == "uncertain":
+            parts.append(row.get("followup"))
+        # A missing fill rejected by anchor constraints needs its rejection reason too.
+        if decision.get("status") == "missing_required" and "必要锚点或分组约束" in decision.get("reason", ""):
+            parts.append("必要锚点或分组约束要求保留此镜")
+        return join(parts)
+    if row.get("verdict") == "uncertain":
+        return join([row.get("reason"), row.get("followup")])
+    if not review:
+        return "缺少当前有效审查，需核对本镜。"
+    return join([decision.get("reason")]) or "缺少当前有效审查，需核对本镜。"
+
+
 @verified_read
 def render_aggregation(p, project, out):
     from planner import current_aggregation
@@ -488,21 +513,20 @@ def render_aggregation(p, project, out):
             code = decision.get("status")
             status = {"anchor_reviewed": "检验通过", "ai_fill_suggested_unverified": "检验通过",
                       "absent_fill_suggested_unverified": "视频漏镜", "missing_required": "必要漏镜，需补生成",
-                      "mismatch": "该镜需重新生成"}.get(code, "待检查")
+                      "mismatch": "该镜需重新生成"}.get(code, "—")
             # Legacy group-only reviews remain conservative and cannot imply per-shot PASS.
             if p.get("config", {}).get("video_source") != "imported" and review and review["verdict"] == "FAIL" and issues:
                 status = "需要重新生成"
             if decision.get("review_verdict") == "absent" and code == "pending":
-                status = "视频漏镜；推导待检查"
-            reason = decision.get("reason", "当前证据不足或已失效，需补查。")
-            if issues:
-                reason += "；" + "；".join(f"{i['time_range']} 秒：{i['problem']}；建议：{i['fix']}" for i in issues)
-            treatment, basis, label = "暂不省图", "—", "待检查"
+                status = "视频漏镜"
+            reason = delivery_note(decision, review, sid, issues)
+            treatment, basis, label = "暂不省图", "—", "暂无有效画面"
+            if decision.get("mapping_status") == "absent":
+                label = "视频漏镜"
             if decision.get("mode") == "ai_fill":
                 treatment, label = "建议省图，未验证", "可推导生成"
                 bracket = decision["bracket"]
                 basis = f"{bracket['before']} + {bracket['after']}"
-                reason += "；建议省图，未验证"
             elif code == "anchor_reviewed":
                 treatment = "保留图"
             elif code == "missing_required":
@@ -520,7 +544,7 @@ def render_aggregation(p, project, out):
                 picture = "可推导生成"
             else:
                 thumb = out / thumbnails[sid]
-                thumbnail(source, thumb, sid, label, "历史抽帧 · 待检查" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
+                thumbnail(source, thumb, sid, label, "历史抽帧 · 证据不足" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
                 picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
                 if source:
                     picture = f"[{picture}](<{names[sid]}>)"
@@ -536,7 +560,7 @@ def render_aggregation(p, project, out):
             _, video = current_video(p, project, source_group)
             name = f"{source_group['id']}（{video.name}）" if video else source_group["id"]
             lines += ["", f"建议重新生成视频 {esc(name)}，原因是必要漏镜达到阈值。"]
-    lines += ["", "重新生成仅为建议，本流程不调用 API；待检查先补证据。", ""]
+    lines += ["", "重新生成仅为建议，本流程不调用 API；证据不足时先补查。", ""]
     path = out / "分镜说明.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return str(path)
