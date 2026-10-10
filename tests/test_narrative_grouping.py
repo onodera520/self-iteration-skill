@@ -1,7 +1,9 @@
 """Narrative decisions are supplied fixtures, not a claim of visual validation."""
 import copy
+import json
 from decimal import Decimal
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import test_previs  # installs script import path
 import test_imported_review as imported
@@ -9,6 +11,7 @@ import grouping
 import previs as core
 import planner
 import storyboard as boards
+import review_draft
 
 
 def project(durations, events=None, strengths=None):
@@ -37,7 +40,7 @@ class NarrativeRulesTests(unittest.TestCase):
 
     def test_independent_event_or_explicit_time_jump_keeps_short_group(self):
         for reason in ('独立新事件，目标改变','翌日，明确时间跳跃'):
-            p=project([3,3])
+            p=project([4,4])
             p['narrative_plan']['boundaries'][0].update(merge_allowed=False,reason=reason)
             result=grouping.partition(p)
             self.assertEqual(result['ranges'],[(0,1),(1,2)])
@@ -51,7 +54,7 @@ class NarrativeRulesTests(unittest.TestCase):
         self.assertEqual(grouping.partition(p)['ranges'],[(0,1),(1,2)])
 
     def test_whole_interval_complexity_cannot_be_inferred_from_pairs(self):
-        p=project([3,3,3],['E1','E2','E3'])
+        p=project([4,4,4],['E1','E2','E3'])
         p['narrative_plan']['safe_spans']=[dict(shot_ids=ids,reason='only this interval checked')
                                          for ids in (['S01','S02'],['S02','S03'])]
         result=grouping.partition(p)
@@ -66,11 +69,12 @@ class NarrativeRulesTests(unittest.TestCase):
     def test_twelve_shots_cap_and_order(self):
         p=project([1]*13)
         result=grouping.partition(p)
-        self.assertEqual(result['ranges'],[(0,12),(12,13)])
+        self.assertEqual(result['ranges'],[(0,9),(9,13)])
+        self.assertIn('minimum_repartition',[t['stage'] for t in result['trace']])
         self.assertIn('12镜',result['reasons'][-1])
 
     def test_source_evidence_and_continuity_boundaries_remain_hard(self):
-        p=project([2,2,2])
+        p=project([4,4,4])
         self.assertEqual(grouping.partition(p,[1])['ranges'],[(0,1),(1,3)])
         p['shots'][1]['continuity_id']='next_day'
         self.assertEqual(grouping.partition(p)['ranges'],[(0,1),(1,2),(2,3)])
@@ -92,6 +96,66 @@ class NarrativeRulesTests(unittest.TestCase):
         self.assertFalse(grouping.partition(p)['feasible'])
         p=project([2,2,2]);p['narrative_plan']['safe_spans'][0]['shot_ids']=['S01','S03']
         with self.assertRaisesRegex(ValueError,'contiguous'): grouping.partition(p)
+
+    def test_exact_four_and_infeasible_short_independent_event(self):
+        self.assertEqual(grouping.partition(project([1.1,2.9]))['ranges'],[(0,2)])
+        for durations,blocked in (([3.99999999],()),([3,4],(1,))):
+            p=project(durations)
+            original=copy.deepcopy(p)
+            result=grouping.partition(p,blocked)
+            self.assertFalse(result['feasible'])
+            self.assertEqual(result['ranges'],[])
+            self.assertIn('4–15秒',result['limitations'][0])
+            self.assertEqual(p,original)
+        p=project([3,4])
+        p['narrative_plan']['boundaries'][0].update(merge_allowed=False,reason='独立事件')
+        self.assertFalse(grouping.partition(p)['feasible'])
+        p=project([3,4,4])
+        p['narrative_plan']['safe_spans']=[]
+        self.assertFalse(grouping.partition(p)['feasible'])
+
+    def test_explicit_beat_cannot_be_crossed_or_joined_nonadjacently(self):
+        p=project([4,4,4])
+        for s,bid in zip(p['shots'],['B1','B2','B1']):
+            s['beat']=dict(id=bid,source=dict(kind='script',ref='原文 Beat'))
+        self.assertEqual(grouping.partition(p)['ranges'],[(0,1),(1,2),(2,3)])
+        p['shots'][0]['duration']=3
+        self.assertFalse(grouping.partition(p)['feasible'])
+
+    def test_beat_metadata_must_be_complete_and_sourced(self):
+        p=project([4,4])
+        p['shots'][0]['beat']=dict(id='B1',source=dict(kind='script',ref='原文 Beat'))
+        with self.assertRaisesRegex(ValueError,'beat'): grouping.partition(p)
+        p['shots'][1]['beat']=dict(id='B2',source=dict(kind='script',ref='原文 Beat'))
+        for change in (lambda b:b.update(id='invalid id'),lambda b:b.pop('source'),
+                       lambda b:b['source'].update(kind='asset')):
+            invalid=copy.deepcopy(p)
+            change(invalid['shots'][1]['beat'])
+            with self.assertRaisesRegex(ValueError,'beat'): grouping.partition(invalid)
+
+    def test_final_audit_rejects_missing_repeated_reordered_and_invalid_groups(self):
+        p=project([4,4,4])
+        for ranges in ([(0,2)],[(0,2),(1,3)],[(1,3),(0,1)],[],[(0,4)]):
+            with self.assertRaisesRegex(ValueError,'every Clip'): grouping.validate_partition(p,ranges)
+        duplicate=copy.deepcopy(p);duplicate['shots'][1]['id']='S01'
+        with self.assertRaisesRegex(ValueError,'unique'): grouping.validate_partition(duplicate,[(0,3)])
+        with self.assertRaisesRegex(ValueError,'4..15'): grouping.validate_partition(project([3]),[(0,1)])
+        with self.assertRaisesRegex(ValueError,'4..15'): grouping.validate_partition(project([8,8]),[(0,2)])
+        for s,bid in zip(p['shots'],['B1','B2','B2']): s['beat']=dict(id=bid)
+        with self.assertRaisesRegex(ValueError,'Beat'): grouping.validate_partition(p,[(0,3)])
+
+    def test_json_view_preserves_ids_duration_and_asset_order_without_second_judgment(self):
+        p=project([2.1,1.9,4],['E1','E1','E2'])
+        p['assets']=[dict(id=aid) for aid in ['scene','girl','key','boy','unused']]
+        for s,aids in zip(p['shots'],[['girl','scene'],['key','girl'],['boy','key']]): s['asset_ids']=aids
+        original=copy.deepcopy(p)
+        ranges=[(0,2),(2,3)]
+        result=json.loads(json.dumps(dict(clipGroupList=grouping.clip_group_list(p,ranges))))
+        self.assertEqual(result,dict(clipGroupList=[
+            dict(shotId='shot_1',originClipIdList=['S01','S02'],totalDuration=4.0,assetIdList=['scene','girl','key']),
+            dict(shotId='shot_2',originClipIdList=['S03'],totalDuration=4.0,assetIdList=['key','boy'])]))
+        self.assertEqual(sum(Decimal(str(g['totalDuration'])) for g in result['clipGroupList']),Decimal('8'))
+        self.assertEqual(p,original)
 
 
 class NarrativeIntegrationTests(imported.fixtures.Base):
@@ -122,6 +186,7 @@ class NarrativeIntegrationTests(imported.fixtures.Base):
         self.mapping()
         result=self.finish()
         self.assertFalse(result['feasible'])
+        self.assertEqual(result['clipGroupList'],[])
         self.assertEqual(result['decisions'][0]['status'],'anchor_reviewed')
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
         self.assertIn('待确定',text)
@@ -155,6 +220,45 @@ class NarrativeIntegrationTests(imported.fixtures.Base):
             self.assertIsNone(planner.current_aggregation(self.p,self.path))
             self.p=original
 
+    def test_beat_is_in_batch_context_compact_view_and_evidence_binding(self):
+        for s in self.p['shots']:
+            s['beat']=dict(id='B01',source=dict(kind='script',ref='第一 Beat'))
+        self.mapping();result=self.finish()
+        ctx=core.video_context(self.p,self.path,'G01')
+        view=review_draft.agent_view(ctx,self.path.parent/'context.json')
+        self.assertEqual([s['beat'] for s in view['shots']],[s['beat'] for s in self.p['shots']])
+        self.assertEqual(result['groups'][0]['beat_id'],'B01')
+        self.assertEqual(result['clipGroupList'][0]['originClipIdList'],result['groups'][0]['shot_ids'])
+        before=core.group_fingerprint(self.p,self.path,self.p['groups'][0])
+        self.p['shots'][1]['beat']['source']['ref']='新分段依据'
+        self.assertNotEqual(before,core.group_fingerprint(self.p,self.path,self.p['groups'][0]))
+        self.assertIsNone(core.review_current(self.p,self.path,'G01'))
+        self.assertIsNone(planner.current_aggregation(self.p,self.path))
+
+    def test_old_policy_and_old_grouping_scope_cannot_reuse_valid_result(self):
+        self.mapping();self.finish()
+        with patch.object(grouping,'POLICY_VERSION',grouping.POLICY_VERSION-1):
+            self.assertIsNone(planner.current_aggregation(self.p,self.path))
+        r=self.review_data()
+        ctx=core.video_context(self.p,self.path,'G01')
+        ctx['review_scope'].pop('min_group_seconds')
+        ctx['review_scope'].pop('grouping_scope')
+        ctx.pop('context_fingerprint');ctx.pop('previous_review')
+        r['context_fingerprint']=core.digest(ctx)
+        with self.assertRaisesRegex(ValueError,'context'): core.record_review(self.p,self.path,r)
+
+    def test_short_impossible_group_stays_placeholder_and_does_not_relabel_verdicts(self):
+        self.p['narrative_plan']['boundaries'][0].update(merge_allowed=False,reason='独立事件')
+        self.mapping();result=self.finish()
+        self.assertFalse(result['feasible'])
+        self.assertEqual(result['clipGroupList'],[])
+        self.assertTrue(all(g['id'].startswith('P') for g in result['groups']))
+        self.assertEqual(result['decisions'][0]['status'],'anchor_reviewed')
+        text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
+        self.assertEqual(sum(l.startswith('| --- |') for l in text.splitlines()),2)
+        self.assertIn('4–15秒',text)
+        self.assertNotIn('| A01 |',text)
+
     def test_batch_grouping_review_required_and_dialogue_excluded_from_scope(self):
         self.p['shots'][1]['script']+=' 她说：明天见。'
         self.mapping()
@@ -162,6 +266,8 @@ class NarrativeIntegrationTests(imported.fixtures.Base):
         self.assertFalse(ctx['review_scope']['dialogue_text'])
         self.assertFalse(ctx['review_scope']['dialogue_lip_sync'])
         self.assertFalse(ctx['review_scope']['duration_accuracy'])
+        self.assertEqual(ctx['review_scope']['min_group_seconds'],4)
+        self.assertEqual(ctx['review_scope']['grouping_scope'],'same_beat')
         self.assertTrue(ctx['review_scope']['visual_actions'])
         self.assertFalse(ctx['review_scope']['subtitles'])
         r=self.review_data();r.pop('grouping_checked')

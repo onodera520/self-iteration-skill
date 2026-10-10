@@ -316,6 +316,8 @@ def video_context(p, project_path, gid):
              "requirements": resolved.get(s["id"]), "selected_frame": current_frame(p, project_path, s["id"])} for s in shots(p, g)]
     for row, s in zip(rows, shots(p, g)):
         row.update(planned_duration=s.get("duration"), duration_source=copy.deepcopy(s.get("duration_source")))
+        if "beat" in s:
+            row["beat"] = copy.deepcopy(s["beat"])
         row['requirements_provenance'] = copy.deepcopy((s.get('requirements') or {}).get('provenance', []))
         if "event" in s:
             row.update(event=copy.deepcopy(s["event"]), scene_id=s["scene_id"], continuity_id=s["continuity_id"])
@@ -339,6 +341,8 @@ def video_context(p, project_path, gid):
             "mapping": next(r for r in om["shots"] if r["shot_id"] == sid) if om else None})
         if p.get("config", {}).get("video_source") == "imported":
             boundaries[-1]["selected_frame"] = current_frame(p, project_path, sid)
+            if "beat" in neighbor:
+                boundaries[-1]["beat"] = copy.deepcopy(neighbor["beat"])
             if "event" in neighbor:
                 boundaries[-1].update(event=copy.deepcopy(neighbor["event"]), scene_id=neighbor["scene_id"], continuity_id=neighbor["continuity_id"])
     result = {"group_id": gid, "version": g["version"], "video_sha256": sha(path),
@@ -359,7 +363,8 @@ def video_context(p, project_path, gid):
             "performance_detail_alone_protected": False,
             "visual_match_basis": "narrative_equivalence",
             "noncritical_visual_variations_allowed": True, "explicit_strict_requirements": True,
-            "group_duration_basis": "script_plan", "max_group_seconds": 15,
+            "group_duration_basis": "script_plan", "min_group_seconds": 4, "max_group_seconds": 15,
+            "grouping_scope": "same_beat",
             "max_group_shots": 12, "short_group_seconds": 8}
     result["context_fingerprint"] = digest(result)
     result["previous_review"] = next((copy.deepcopy(r) for r in reversed(p.get("reviews", [])) if r["group_id"] == gid), None)

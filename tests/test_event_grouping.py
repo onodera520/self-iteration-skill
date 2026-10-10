@@ -74,6 +74,7 @@ class EventGroupingTests(fixtures.Base):
 
     def test_same_scene_different_events_and_nonadjacent_repeated_ids(self):
         self.events(['E01','E02','E01'])
+        for s in self.p['shots']: s['duration']=4
         result = self.run_plan()
         self.assertEqual(self.partitions(result),[['S01'],['S02'],['S03']])
 
@@ -95,6 +96,7 @@ class EventGroupingTests(fixtures.Base):
     def test_time_jump_starts_new_event_even_in_same_scene(self):
         self.events(['E01','E01','E02'])
         self.p['shots'][2]['script']='翌日同一地点，男孩已拿稳钥匙。'
+        self.p['shots'][2]['duration']=4
         self.assertEqual(self.partitions(self.run_plan()),[['S01','S02'],['S03']])
 
     def test_legacy_without_events_can_review_but_cannot_finalize_new_groups(self):
@@ -128,6 +130,7 @@ class EventGroupingTests(fixtures.Base):
 
     def test_source_boundary_needs_valid_reviews_even_for_same_event(self):
         self.p['groups']=[dict(id='G01',version=1,shot_ids=['S01']),dict(id='G02',version=1,shot_ids=['S02','S03'])]
+        self.p['shots'][0]['duration']=4
         for gid in ('G01','G02'): self.mapping(gid)
         for gid in ('G01','G02'):
             ctx=core.video_context(self.p,self.path,gid)
@@ -179,5 +182,5 @@ class EventGroupingTests(fixtures.Base):
         result=self.run_plan()
         self.assertEqual(len(result['groups']),2)
         self.assertEqual([sid for g in result['groups'] for sid in g['shot_ids']],self.p['groups'][0]['shot_ids'])
-        self.assertEqual([len(g['shot_ids']) for g in result['groups']],[12,1])
+        self.assertEqual([len(g['shot_ids']) for g in result['groups']],[9,4])
         self.assertIn('12镜',result['groups'][-1]['reason'])

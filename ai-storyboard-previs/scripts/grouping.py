@@ -1,7 +1,9 @@
 """Narrative-first imported-video partitioning. No media or paid operations."""
 from decimal import Decimal
+import re
 
-POLICY_VERSION = 2
+POLICY_VERSION = 3
+MIN_SECONDS = Decimal('4')
 MAX_SECONDS = Decimal('15')
 SHORT_SECONDS = Decimal('8')
 MAX_SHOTS = 12
@@ -12,9 +14,17 @@ def validate_metadata(p, report=None):
     from validation import Report, sourced, text, text_array, shot_path
     own = report is None
     report = report if report is not None else Report()
+    has_beat = any('beat' in s for s in p['shots'])
     for i, s in enumerate(p['shots']):
+        path = shot_path(s, i)
+        if has_beat:
+            beat = s.get('beat')
+            if report.kind(beat, dict, path + '.beat'):
+                report.check(text(beat.get('id')) and bool(re.fullmatch(r'[A-Za-z0-9_-]+', beat['id'])),
+                             path + '.beat.id', 'beat needs a stable identifier')
+                report.check(sourced(beat.get('source'), ('script', 'inference')),
+                             path + '.beat.source', 'beat needs script/inference and ref')
         if 'duration_source' in s:
-            path = shot_path(s, i)
             report.check(sourced(s['duration_source'], ('script', 'inference')), path + '.duration_source', 'duration_source needs script/inference and ref')
             report.check(number(s.get('duration')) and s['duration'] > 0, path + '.duration', 'duration_source requires positive duration')
     data = p.get('narrative_plan')
@@ -45,6 +55,42 @@ def validate_metadata(p, report=None):
                     report.check(ids[start:start+len(seq)] == seq, path + '.shot_ids', 'safe span must be contiguous and explain whole-interval complexity')
     if own:
         report.finish()
+
+
+def validate_partition(p, ranges):
+    """Audit coverage/order and duration conservation independently of the solver."""
+    ss = p['shots']
+    ids = [s['id'] for s in ss]
+    if len(ids) != len(set(ids)):
+        raise ValueError('Clip identifiers must be unique')
+    cursor, totals = 0, []
+    for a, b in ranges:
+        if a != cursor or not a < b <= len(ss):
+            raise ValueError('partition must cover every Clip exactly once in original order')
+        total = sum((Decimal(str(s['duration'])) for s in ss[a:b]), Decimal(0))
+        if not MIN_SECONDS <= total <= MAX_SECONDS or b-a > MAX_SHOTS:
+            raise ValueError('each group requires 4..15 seconds and at most 12 Clips')
+        if len({s.get('beat', {}).get('id') for s in ss[a:b]}) != 1:
+            raise ValueError('a group cannot cross Beat boundaries')
+        totals.append(total)
+        cursor = b
+    if cursor != len(ss) or not ranges:
+        raise ValueError('partition must cover every Clip exactly once in original order')
+    if sum(totals, Decimal(0)) != sum((Decimal(str(s['duration'])) for s in ss), Decimal(0)):
+        raise ValueError('partition must conserve total duration')
+    return totals
+
+
+def clip_group_list(p, ranges):
+    """JSON-ready internal Clip -> Shot view; no second LLM transformation."""
+    totals = validate_partition(p, ranges)
+    result = []
+    for n, ((a, b), total) in enumerate(zip(ranges, totals), 1):
+        used = {aid for s in p['shots'][a:b] for aid in s['asset_ids']}
+        result.append(dict(shotId=f'shot_{n}', originClipIdList=[s['id'] for s in p['shots'][a:b]],
+                           totalDuration=float(total),
+                           assetIdList=[asset['id'] for asset in p['assets'] if asset['id'] in used]))
+    return result
 
 
 def partition(p, blocked_starts=()):
@@ -85,17 +131,20 @@ def partition(p, blocked_starts=()):
                 return '跨来源视频边界尚未检验通过'
             if ss[j]['continuity_id'] != ss[j-1]['continuity_id']:
                 return '明确时空或连续性边界'
+            if ss[j].get('beat', {}).get('id') != ss[j-1].get('beat', {}).get('id'):
+                return '不同 Beat，不跨段聚合'
             if not edges[j-1]['merge_allowed']:
                 return edges[j-1]['reason']
         if b-a > 1 and not any(x <= a and b <= y for x, y in spans):
             return '整段生成复杂度未获支持，不能由两两可合并外推'
         return None
 
-    # Natural events first; oversized/complex events split at the strongest cut
-    # available within their feasible prefix (weaker continuation cuts first).
+    # Natural events first; oversized/complex events split at the weakest
+    # continuation available within their feasible prefix.
     natural = [0] + [i for i in range(1, len(ss)) if
         ss[i]['event']['id'] != ss[i-1]['event']['id'] or
         not edges[i-1]['merge_allowed'] or i in blocked or
+        ss[i].get('beat', {}).get('id') != ss[i-1].get('beat', {}).get('id') or
         ss[i]['continuity_id'] != ss[i-1]['continuity_id']] + [len(ss)]
     groups = []
     for a, end in zip(natural, natural[1:]):
@@ -130,6 +179,30 @@ def partition(p, blocked_starts=()):
 
     merge_pass()
     merge_pass(short_only=True)
+    if any(length(a, b) < MIN_SECONDS for a, b in groups):
+        # Moving a cut can avoid a short tail (e.g. 12+1 -> 9+4 Clips).
+        # Repartition only when necessary; never relax a narrative/evidence gate.
+        best = {0: ((0, 0, ()), [])}
+        for b in range(1, len(ss)+1):
+            choices = []
+            for a in range(max(0, b-MAX_SHOTS), b):
+                if a not in best or length(a, b) < MIN_SECONDS or obstacle(a, b):
+                    continue
+                score, prefix = best[a]
+                cut_cost = edges[a-1]['strength'] if a else 0
+                # Fewer groups; weaker cuts; longer earlier group on ties.
+                key = (score[0]+1, score[1]+cut_cost, score[2]+(-b,))
+                choices.append((key, prefix+[(a, b)]))
+            if choices:
+                best[b] = min(choices)
+        if len(ss) not in best:
+            return dict(feasible=False, ranges=[], reasons=[], trace=trace,
+                        limitations=['无法同时满足每组4–15秒、12镜上限及剧情/Beat/来源证据边界；需补充连续内容、拆分或调整计划时长，不能自动改时长或跨边界合并。'])
+        groups[:] = best[len(ss)][1]
+        trace.append(dict(stage='minimum_repartition', ranges=list(groups),
+                          reason='重排相邻切分位置以满足4秒下限，原镜序及计划时长不变'))
+        merge_pass()
+        merge_pass(short_only=True)
     reasons = []
     for i, (a, b) in enumerate(groups):
         summaries = list(dict.fromkeys(s['event']['summary'] for s in ss[a:b]))
@@ -146,4 +219,5 @@ def partition(p, blocked_starts=()):
             reason += '；短段已复核：' + note + '。'
             trace.append(dict(stage='short_review', shot_ids=ids[a:b], reason=note))
         reasons.append(reason)
+    validate_partition(p, groups)
     return dict(feasible=True, ranges=groups, reasons=reasons, trace=trace, limitations=[])

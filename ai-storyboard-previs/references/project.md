@@ -22,6 +22,7 @@
 | requirements.must_have / must_not_have | 字符串数组，例如 `["男孩接住钥匙"]` |
 | requirements.provenance | 来源对象数组；每个要求块一条来源 |
 | event / duration_source / narrative_plan | 对象，完整格式见默认模板 |
+| beat（可选） | 对象：id＋source；显式提供时覆盖全部镜头，否则全脚本按一个 Beat 处理 |
 | repair_asset_style.assets[].visible_style_facts | 非空字符串数组，不能把整个列表写成一段字符串 |
 
 先固定资产 ID 清单，再写所有镜头的 entity。属性属于谁就引用谁（例如人物的缺氧状态引用该人物 ID）；不存在对应资产的剧情要求保留在有来源的 requirements 描述与必要画面要求中，不硬套无关角色、不伪造资产、不丢弃剧情要求。当前版本不支持独立 story_entities，不能靠新增同名字段绕过约束。
@@ -52,6 +53,7 @@
 - assets: id/kind/description/path，kind 为 character/scene/prop；审查阶段本地比对，不冒充视频抽帧；授权固定工作流返修时保持全部原始顺序上传。
 - shots: id/script/scene_id/continuity_id/asset_ids/required_result；script 逐字保存本镜原文（含标点换行），不摘要；保持原镜序。imported 模式可先省略 duration 抽帧审查；最终聚合须填写正数计划秒数及 duration_source（kind: script 或 inference，ref: 原文出处或建议依据）。缺原文时长时代理提出建议并明确标注，不从实际视频冒充脚本值。shot_size 只填脚本明确景别；keyframe.description 保留关键画面要求。
 - shots[].event：新项目每镜填写 `{"id":"E03","summary":"推门、到门外开伞并追出，构成连续行动","source":{"kind":"inference","ref":"S07 推门与 S08 门外开伞追出属于连续行动"}}`。id 为非空字母、数字、下划线或连字符组成的编号；同编号 summary 一致，source 沿用 script/asset/inference 分级。event 只提供初步自然段，不替代 scene_id/continuity_id 或状态继承。旧项目允许全部不填，不能只填部分镜头。
+- shots[].beat：输入明确给定 Beat 时填 `{"id":"B01","source":{"kind":"script","ref":"原文 Beat 1"}}`，id 为字母、数字、下划线或连字符；source 为 script/inference 并说明出处。一旦显式使用，每镜都必须填写；未提供则全脚本视为一个隐式 Beat，不从 event 自动推导。不同 Beat 不合组，状态继承仍按 continuity_id 计算。
 - narrative_plan：完整脚本的相邻承接、自然边界与整段复杂度依据，结构及三步规则见 [规划约定](planning.md)。不改变状态继承；缺少时允许审查，但不能交付新版合格聚合。
 - facts/state_changes/intent/omission_assessment：按 [事实规则](facts-and-planner.md)。requirements 按 [镜头要求](shot-requirements.md)，代理仅写入口种子和变化，工具计算完整状态。每镜 requirements 要求块一条 provenance，其他来源分级不变。
 - reference：保留兼容 mode: anchor|ai_fill、path、role、reason、locked。它不是新的审查结论；最终读取独立 aggregation。
@@ -87,13 +89,13 @@ evidence 包含非空 visible_facts 和 interpretation，保留 observation 摘�
 
 planner.py --post-review 在副本内处理规则，仅保存 p.aggregation；旧建议留在 aggregation_history。原 groups、视频版本、匹配时间和 tasks 不被覆盖。
 
-groups 使用 A01 等编号、shot_ids、reason、source_group_ids；新版 imported 聚合含 planned_duration（计划总秒数）、duration_has_suggestion、planning_status。feasible: false 时使用 P 编号待规划占位，不把超限单镜包装为合格组。grouping_trace 保存自然初分、相邻合并和短段复核，用户不必阅读内部记录。decisions 包含 shot_id/group_id/source_group_id/mode/status/reason/bracket/frame/mapping_status/review_verdict/issues。
+groups 使用 A01 等编号、shot_ids、reason、source_group_ids；新版 imported 聚合含 planned_duration（计划总秒数）、duration_has_suggestion、planning_status、beat_id（未显式提供时为 null）。合格组为同一 Beat 内4–15秒、≤12镜的连续区间。feasible: false 时使用 P 编号待规划占位，不把不满足时长或剧情约束的占位包装为合格组。grouping_trace 保存自然初分、相邻合并、必要的切分位置重排和短段复核，用户不必阅读内部记录。clipGroupList 保存同构的内部 JSON 清单：shotId、originClipIdList、totalDuration、assetIdList；按原镜序覆盖一次，时长守恒，资产取原镜绑定的并集并保持项目资产顺序；无解时为空。decisions 包含 shot_id/group_id/source_group_id/mode/status/reason/bracket/frame/mapping_status/review_verdict/issues。
 
 状态含义：anchor_reviewed 为检验通过保留图；ai_fill_suggested_unverified 为该镜通过且建议省图；absent_fill_suggested_unverified 为确认漏镜但可推导，未验证；mismatch 为该镜需重新生成；missing_required 为必要漏镜；pending 为证据或推导不足。mode 分别为 anchor/ai_fill/pending，不等于视频是否通过。
 
 missing_summary 按来源视频记录 bad_num/total/ratio/regenerate，仅内部保存。bad_num 只计 missing_required，每原镜号一次；已定位的画面错误、可推导漏镜、待检查不计。默认 2/10 触发，2/11 与 1/3 不触发。
 
-evidence_fingerprint 绑定脚本（含 event、duration、duration_source、narrative_plan）及聚合规则版本、资产、源视频、匹配、帧哈希、选帧、组级审查及漏镜策略。上述时长、来源、剧情依据同时进入来源组指纹与审查上下文；增加或修改后重新绑定输入并审查，旧结论不可复用为通过。缺失镜头的结论绑定完整补查和依据图片，不创造缺失图的哈希。来源变化后旧审查和聚合失效，不能通过改状态字符串恢复通过。
+evidence_fingerprint 绑定脚本（含 beat、event、duration、duration_source、narrative_plan）及聚合规则版本、资产、源视频、匹配、帧哈希、选帧、组级审查及漏镜策略。上述时长、来源、剧情依据同时进入来源组指纹与审查上下文；增加或修改后重新绑定输入并审查，旧结论不可复用为通过。grouping policy=3；新版审查上下文包含4秒下限与同 Beat 范围，旧审查需重新核对分组依据，不自动升级为通过；有效帧与观察仍可复用。缺失镜头的结论绑定完整补查和依据图片，不创造缺失图的哈希。来源变化后旧审查和聚合失效，不能通过改状态字符串恢复通过。
 
 ## 固定交付
 
@@ -101,7 +103,7 @@ render 在干净目录生成 `分镜说明.md` 和 `images/`。仅确认漏镜�
 
 MD 固定只包含两张表：
 
-1. **分组表**：分组编号、镜头顺序、总时长、简短分组理由。只聚合相邻镜头，每组 ≤15 秒、≤12 镜；包含建议时长的组注明“含建议值”。
+1. **分组表**：分组编号、镜头顺序、总时长、简短分组理由。只聚合同一 Beat 内相邻镜头，每组合格方案为4–15秒、≤12镜；包含建议时长的组注明“含建议值”。无可行分组时说明约束冲突，P 编号只表示待分组占位。
 2. **逐镜表**：分组、原镜号、镜头时长、脚本描述、小分镜图、检验结果、图片处理、推导依据镜号、问题或修改建议。
 
 逐镜时长为脚本计划值，建议值注明“建议”；不拿原视频实际时长作内容失败依据。检验通过与图片处理分列。影响角色/行动识别、关键动作结果、因果或必要空间关系，或违反用户明确严格要求的错误写“该镜需重新生成”；不影响剧情的外观、站位、景别、姿势或动作细节差异可通过。无法对应本镜事件或必要证据不足先补查；仍无法确认时，检验结果写“—”、图片处理写“暂不省图”，问题栏说明具体缺口及补查方向，不写“待检查”。已确认漏镜但推导依据不足时仍写“视频漏镜”，问题栏说明缺少的省图依据；不能改成通过、必要漏镜或 ai_fill。内部 uncertain/pending 不变。最终省图的已有通过镜头仍展示抽帧图片，只有确认漏镜的小分镜图栏写“可推导生成”；两者图片处理栏均写“建议省图，未验证”；检验结果按原结论分别写“检验通过”或“视频漏镜”，列依据镜号及具体承接理由；必要漏镜写“必要漏镜，需补生成”。旧证据不支持当前通过或错误结论。

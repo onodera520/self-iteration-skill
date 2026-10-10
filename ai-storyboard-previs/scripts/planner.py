@@ -233,7 +233,7 @@ def options(p, project_path, profile, analysis, start, end):
     length = (sum(Decimal(str(s["duration"])) for s in ss) if not p.get("_content_review") or p.get("_narrative_ready") else Decimal(0))
     if "_narrative_ranges" in p and (start, end) not in p["_narrative_ranges"]:
         return []
-    if p.get("_narrative_ready") and length > Decimal(15):
+    if p.get("_narrative_ready") and not Decimal(4) <= length <= Decimal(15):
         return []
     if len(ss) > profile["max_shots_per_group"] or (len(ss) > 1 and not profile["allow_multi_shot"]):
         return []
@@ -370,12 +370,12 @@ def missing_summary(groups, decisions, config):
 @verified_read
 def imported_post_review_plan(p, project_path, profile):
     from storyboard import current_frame, mapping_row
-    from grouping import partition
+    from grouping import partition, clip_group_list
     validate(p, project_path)
     # Narrative partitioning precedes anchor optimization; no paid model profile.
-    effective = dict(id="content-review", source={"kind": "inference", "ref": "剧情初分、相邻合并、短段复核；15秒与12镜上限"},
+    effective = dict(id="content-review", source={"kind": "inference", "ref": "Beat内剧情初分、相邻合并、短段复核；4–15秒与12镜上限"},
                      max_images=12, max_shots_per_group=12, max_fill_per_group=10, allow_multi_shot=True,
-                     min_duration=.001, max_duration=15, video_cost_cny=0, missing_anchor_cost_cny=0,
+                     min_duration=4, max_duration=15, video_cost_cny=0, missing_anchor_cost_cny=0,
                      aspect_ratios=[p["config"].get("aspect_ratio")])
     working, states, reviews = copy.deepcopy(p), {}, {}
     working.update(_post_review=True, _content_review=True)
@@ -427,6 +427,7 @@ def imported_post_review_plan(p, project_path, profile):
         if not narrative["feasible"]:
             g["planned_duration"] = None
         g["source_group_ids"] = list(dict.fromkeys(states[sid]["source_group_id"] for sid in g["shot_ids"]))
+        g["beat_id"] = original_shots[g["shot_ids"][0]].get("beat", {}).get("id")
         for d in result["decisions"]:
             if d["group_id"] != old_id:
                 continue
@@ -455,6 +456,7 @@ def imported_post_review_plan(p, project_path, profile):
         if d["mode"] == "ai_fill":
             require(all(by_id[b]["status"] == "anchor_reviewed" for b in d["bracket"].values()), "inference basis is not a retained passed anchor")
     result.update(stage="post_review", feasible=narrative["feasible"], profile=copy.deepcopy(profile),
+                  clipGroupList=clip_group_list(p, narrative["ranges"]) if narrative["feasible"] else [],
                   grouping_trace=narrative["trace"],
                   evidence_fingerprint=aggregation_fingerprint(p, project_path, profile),
                   missing_summary=missing_summary(p["groups"], result["decisions"], p["config"]),

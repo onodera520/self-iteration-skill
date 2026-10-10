@@ -489,11 +489,11 @@ def render_aggregation(p, project, out):
     lines = ["# " + esc(p["title"]), "", f"共 {len(p['shots'])} 镜。", "",
              "已有镜头即使建议省图仍展示抽帧；仅确认漏镜且批准省图时显示“可推导生成”。省图为建议，未验证，脚本镜头仍保留。", ""]
     if p.get("config", {}).get("video_source") == "imported":
-        lines += ["时长采用脚本计划值，每组不超过15秒；建议值单独标注。对白不作逐字或口型同步检查。", ""]
+        lines += ["时长采用脚本计划值，每组4–15秒；建议值单独标注。对白不作逐字或口型同步检查。", ""]
     if not proposal:
         lines += ["聚合建议尚未生成或依据已变化，以下按视频来源分组展示，需检查。", ""]
     elif not proposal["feasible"]:
-        lines += ["聚合尚未完成；P 编号仅为待分组占位，不代表已符合15秒上限。", ""]
+        lines += ["聚合尚未完成；P 编号仅为待分组占位，不代表已符合4–15秒及剧情边界要求。", ""]
     from previs import review_current
     reviews = {g["id"]: review_current(p, project, g["id"]) for g in p["groups"]}
     lines += ["## 分组结果", "", "| 分组编号 | 镜头顺序 | 总时长 | 简短分组理由 |", "| --- | --- | --- | --- |"]
