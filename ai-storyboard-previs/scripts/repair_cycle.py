@@ -535,7 +535,7 @@ def main():
     ap.add_argument('target', nargs='?')
     ap.add_argument('--output', type=Path)
     ap.add_argument('--task-id')
-    ap.add_argument('--submit', action='store_true', help='Explicit authorized RH-coin submission; implementation tests never use this')
+    ap.add_argument('--submit', action='store_true', help='Execute paid submission under standing or task authorization; omit for preview, never use in implementation tests')
     args = ap.parse_args()
     project = args.project.resolve()
     with core.locked(project):

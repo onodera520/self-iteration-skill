@@ -327,6 +327,35 @@ class RepairCycleTests(fixtures.Base):
         with self.assertRaises(ValueError):repair.snapshot(self.p,self.path,self.path.parent/'new','repaired')
         self.assertEqual(api.submissions,1)
 
+    def apply_new_project_repair_defaults(self):
+        config = core.read(fixtures.ROOT / 'ai-storyboard-previs/assets/imported-project.json')['config']
+        self.assertEqual(config['max_submissions'], 1)
+        self.assertNotIn('budget_cny', config)
+        self.p['config']['max_submissions'] = config['max_submissions']
+        self.p['config']['max_repair_rounds'] = config['max_repair_rounds']
+
+    def test_new_project_standing_authorization_allows_only_one_fake_submission(self):
+        self.ready()
+        self.apply_new_project_repair_defaults()
+        repair.snapshot(self.p, self.path, self.path.parent / 'original', 'original')
+        api = FakeWorkflow()
+        # The agent supplies the existing explicit switch under standing user authorization.
+        self.assertEqual(repair.submit(self.p, self.path, 'G01', api, True), 'QUEUED')
+        self.assertEqual(repair.submit(self.p, self.path, 'G01', api, True), 'SUCCESS')
+        self.assertEqual(api.submissions, 1)
+        self.assertEqual(api.queries, 1)
+        self.assertTrue(repair.decide(self.p, self.path, 'G01')['automatic_allowance_used'])
+
+    def test_new_project_cap_counts_reservation_from_other_source(self):
+        self.ready()
+        self.apply_new_project_repair_defaults()
+        repair.snapshot(self.p, self.path, self.path.parent / 'original', 'original')
+        self.p['tasks']['other-source'] = dict(reserved=True, status='submission_unknown')
+        api = FakeWorkflow()
+        with self.assertRaisesRegex(ValueError, 'Existing submission cap reached'):
+            repair.submit(self.p, self.path, 'G01', api, True)
+        self.assertEqual(api.submissions, 0)
+
     def test_existing_budget_caps_rounds_and_missing_authorization_stop(self):
         self.ready()
         repair.snapshot(self.p,self.path,self.path.parent/'original','original')
