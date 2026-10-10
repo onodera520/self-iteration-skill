@@ -12,6 +12,7 @@ import planner
 import repair_cycle as repair
 import repair_prompt
 import repair_aspect
+import repair_reference
 
 
 class FakeWorkflow:
@@ -623,7 +624,7 @@ class RepairCycleTests(fixtures.Base):
     def test_legacy_formats_recover_and_install_without_new_submission(self):
         self.ready()
         original = copy.deepcopy(self.p)
-        for version in (None, 0, 2, repair_prompt.VERSION):
+        for version in (None, 0, 2, 3, repair_prompt.VERSION):
             with self.subTest(version=version):
                 self.p = copy.deepcopy(original)
                 request = repair._compose_prompt(self.p, self.path, 'G01', version)
@@ -711,6 +712,89 @@ class RepairCycleTests(fixtures.Base):
         self.mock_aspect_probe.side_effect = replace_source
         with self.assertRaisesRegex(ValueError, 'changed while probing'):
             repair.prepare(self.p, self.path, 'G01')
+
+
+    def reference_ready(self, prepare_review=True):
+        if prepare_review:
+            self.ready()
+        raw = '雨夜冷光。角色开口说话并配字幕。'
+        source = repair_reference.register(self.p, self.path, 'G01', raw)
+        bound = repair.current_decision(self.p, self.path, 'G01')['binding']
+        assessment = dict(source_sha256=source['text_sha256'], video_sha256=source['video_sha256'],
+            script_fingerprint=bound['script_fingerprint'], preserves_story=True,
+            compatibility_reason='SIMULATED compatible visual atmosphere; script and fixed generation rules retain priority',
+            selections=[dict(shot_id='S01', source_quote='雨夜冷光。',
+                script_quote=self.p['shots'][0]['script'], visual_text='雨夜冷光。')],
+            excluded=[dict(source_quote='角色开口说话并配字幕。', reason='与无声、无屏幕文字生成要求冲突')])
+        self.p['repair_prompt_references'] = {'G01': assessment}
+        return source, assessment
+
+    def test_original_prompt_selected_only_and_visual_review_unchanged(self):
+        self.ready()
+        fingerprint = core.group_fingerprint(self.p, self.path, core.group(self.p, 'G01'))
+        reviewed = copy.deepcopy(core.review_current(self.p, self.path, 'G01'))
+        grouped = copy.deepcopy(planner.current_aggregation(self.p, self.path))
+        self.reference_ready(prepare_review=False)
+        request = repair.prepare(self.p, self.path, 'G01')
+        self.assertIn('【原提示词参考】雨夜冷光。', request['prompt'])
+        self.assertNotIn('角色开口说话并配字幕。', request['prompt'])
+        self.assertEqual(request['blocks'][0]['text'], self.p['shots'][0]['script'])
+        self.assertEqual(fingerprint, core.group_fingerprint(self.p, self.path, core.group(self.p, 'G01')))
+        self.assertEqual(reviewed, core.review_current(self.p, self.path, 'G01'))
+        self.assertEqual(grouped, planner.current_aggregation(self.p, self.path))
+
+    def test_original_prompt_bad_bindings_and_leakage_rejected(self):
+        self.reference_ready()
+        original = copy.deepcopy(self.p)
+        for key, value in [('source_sha256', '0'*64), ('video_sha256', '0'*64),
+                           ('script_fingerprint', '0'*64), ('preserves_story', False),
+                           ('compatibility_reason', '')]:
+            with self.subTest(key=key):
+                self.p = copy.deepcopy(original)
+                self.p['repair_prompt_references']['G01'][key] = value
+                with self.assertRaises(ValueError):
+                    repair.prepare(self.p, self.path, 'G01')
+        for key, value in [('shot_id', 'other'), ('script_quote', 'NOT IN SCRIPT'),
+                           ('source_quote', 'NOT IN PROMPT'), ('visual_text', '角色开口说话')]:
+            with self.subTest(key=key):
+                self.p = copy.deepcopy(original)
+                self.p['repair_prompt_references']['G01']['selections'][0][key] = value
+                with self.assertRaises(ValueError):
+                    repair.prepare(self.p, self.path, 'G01')
+        self.p = copy.deepcopy(original)
+        self.p['source_video_prompts']['G01']['video_sha256'] = '0'*64
+        with self.assertRaisesRegex(ValueError, 'source video'):
+            repair.prepare(self.p, self.path, 'G01')
+
+    def test_original_prompt_changes_invalidate_preview_but_preserve_stored_request(self):
+        self.reference_ready()
+        request = repair.prepare(self.p, self.path, 'G01')
+        task = dict(request=copy.deepcopy(request), fingerprint=core.digest(request), repair_source_group='G01')
+        repair_reference.register(self.p, self.path, 'G01', '新的原提示词')
+        with self.assertRaisesRegex(ValueError, 'stale prompt'):
+            repair.prepare(self.p, self.path, 'G01', request)
+        repair.validate_stored_request(self.p, self.path, task)
+        self.assertEqual(request, task['request'])
+
+    def test_optional_original_prompt_without_selection_stops_and_all_excluded_is_valid(self):
+        source, assessment = self.reference_ready()
+        del self.p['repair_prompt_references']
+        with self.assertRaisesRegex(ValueError, 'batch'):
+            repair.prepare(self.p, self.path, 'G01')
+        assessment['selections'] = []
+        assessment['excluded'] = [dict(source_quote=source['text'], reason='SIMULATED conflict with script')]
+        self.p['repair_prompt_references'] = {'G01': assessment}
+        self.assertNotIn('【原提示词参考】', repair.prepare(self.p, self.path, 'G01')['prompt'])
+
+    def test_absent_optional_prompt_preserves_v3_generation_text(self):
+        self.ready()
+        old = repair._compose_prompt(self.p, self.path, 'G01', 3, input_aspect=True)
+        new = repair.prepare(self.p, self.path, 'G01')
+        self.assertEqual(old['prompt'], new['prompt'])
+        self.assertEqual(old['blocks'], new['blocks'])
+        self.assertNotIn('source_prompt_reference', new)
+        repair.validate_stored_request(self.p, self.path,
+            dict(request=old, fingerprint=core.digest(old), repair_source_group='G01'))
 
 
 if __name__=='__main__':unittest.main()

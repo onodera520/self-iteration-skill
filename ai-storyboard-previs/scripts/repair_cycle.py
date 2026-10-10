@@ -10,6 +10,9 @@ import previs as core
 import planner
 import repair_prompt
 import repair_aspect
+import repair_reference
+
+_CURRENT_REFERENCE = object()
 
 POLICY = 2
 WORKFLOW = "2099403222661287938"
@@ -171,7 +174,7 @@ def asset_style(p, assets):
     return profile
 
 
-def _compose_prompt(p, project, gid, version, input_aspect=False):
+def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snapshot=_CURRENT_REFERENCE):
     # Historical config-based requests reconstruct exactly for recovery/installation only.
     d = current_decision(p, project, gid)
     core.require(d['triggered'], 'Repair threshold not reached')
@@ -181,8 +184,12 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
     assessment = {s['shot_id']: s for s in d['assessments']}
     ss = core.shots(p, core.group(p, gid))
     views = repair_prompt.input_views(ss, original, resolved,
-        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version in (2, repair_prompt.VERSION) else {}
-    visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {})) if version == repair_prompt.VERSION else None
+        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version in (2, 3, repair_prompt.VERSION) else {}
+    visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {})) if version in (3, repair_prompt.VERSION) else None
+    reference, guidance = None, {}
+    if version == repair_prompt.VERSION:
+        reference = repair_reference.current(p, gid) if reference_snapshot is _CURRENT_REFERENCE else reference_snapshot
+        guidance = repair_reference.validate(reference, d['binding'], original, [s['id'] for s in ss])
     def render_text(path, text):
         return visual.text(path, text) if visual else text
     assets = d['binding']['assets']
@@ -195,6 +202,8 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
              '画幅：' + str(aspect)]
     if visual:
         lines.insert(0, repair_prompt.SILENT_DIRECTIVE)
+    if reference is not None:
+        lines.append('原提示词参考仅补充与本镜脚本相容的视觉细节；剧情、行动主体、镜序和结果以本镜正文及约束为准，生成时长、画幅与固定预演要求以本次请求为准。')
     lines.extend(render_text(f'format.{i}', text) for i, text in enumerate(baseline(p)['format_requirements']))
     if shape:
         lines.append(f'本次返修以输入视频画幅 {aspect} 为准；原文或固定工作流中不一致的画幅不用于本次。仅调整本次请求，不裁切输入视频。')
@@ -252,6 +261,9 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
             line += '【本镜关键变化】' + '；'.join(changes)
         if 'correction' in block:
             line += '【仅本镜返修补充】' + block['correction']
+        if s['id'] in guidance:
+            block['input_prompt_guidance'] = guidance[s['id']]
+            line += '【原提示词参考】' + '；'.join(guidance[s['id']])
         lines += [line]
     lines += ['\n【固定预演要求】', PREVIS_DIRECTIVE,
               ('小幅运动仍须清楚呈现原脚本的关键动作和结果，保留所有镜头与硬切。' if visual else
@@ -281,7 +293,9 @@ def _compose_prompt(p, project, gid, version, input_aspect=False):
                 duration_seconds=float(seconds), aspect_ratio=aspect)
     if shape:
         result['input_aspect'] = shape
-    if version in (2, repair_prompt.VERSION):
+    if reference is not None:
+        result['source_prompt_reference'] = copy.deepcopy(reference)
+    if version in (2, 3, repair_prompt.VERSION):
         result['prompt_version'] = version
         if visual:
             result['visual_adaptations'] = visual.used
@@ -301,8 +315,9 @@ def validate_stored_request(p, project, task):
     gid = task['repair_source_group']
     if 'prompt_version' in request:
         version = request['prompt_version']
-        core.require(version in (2, repair_prompt.VERSION), 'Unsupported repair prompt version')
-        expected = _compose_prompt(p, project, gid, version, input_aspect='input_aspect' in request)
+        core.require(version in (2, 3, repair_prompt.VERSION), 'Unsupported repair prompt version')
+        expected = _compose_prompt(p, project, gid, version, input_aspect='input_aspect' in request,
+                                   reference_snapshot=request.get('source_prompt_reference'))
         request_limits(p, expected)
         core.require(request == expected, 'Inputs changed since submission; do not attach stale repair')
     else:

@@ -123,6 +123,7 @@ def main():
     preflight.add_argument('--script', required=True)
     preflight.add_argument('--video', required=True)
     preflight.add_argument('--asset', action='append', required=True)
+    preflight.add_argument('--video-prompt', help='Optional original video prompt TXT/MD')
     run = commands.add_parser('run')
     for name in ('project', 'group', 'video', 'output'):
         run.add_argument(name)
@@ -130,7 +131,8 @@ def main():
     args = ap.parse_args()
     if args.command == 'preflight':
         result = {'inputs': check_files([('script', args.script), ('video', args.video)] +
-                  [(f'asset[{n}]', path) for n, path in enumerate(args.asset, 1)]),
+                  [(f'asset[{n}]', path) for n, path in enumerate(args.asset, 1)] +
+                  ([('video_prompt', args.video_prompt)] if args.video_prompt else [])),
                   'scope': 'paths_only', 'verified': False}
     else:
         result = prepare(args.project, args.group, args.video, args.output, args.run_dir)

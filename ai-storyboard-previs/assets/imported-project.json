@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "source_video_prompts": {},
   "title": "已有视频校对模板：钥匙交接（三镜）",
   "source_script": "S01 门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。\nS02 手部特写，女孩把红挂件钥匙向男孩递出。\nS03 中景，男孩接住钥匙，女孩松手。",
   "assets": [

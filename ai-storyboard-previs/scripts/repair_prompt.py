@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import re
 
-VERSION = 3
+VERSION = 4
 SILENT_DIRECTIVE = ('只生成无声画面。人物不说话，不做说话口型；'
     '不得生成任何人声、对白、旁白、OS/VO、音乐或音效；'
     '不得出现字幕、对白文字、台词文字或其他新增屏幕文字。'
@@ -157,7 +157,7 @@ def validate(request, shot_ids):
             errors.append('generation duration sum differs from request')
     except InvalidOperation:
         errors.append('invalid request duration')
-    if request.get('prompt_version') == VERSION:
+    if request.get('prompt_version') in (3, VERSION):
         if not prompt.startswith(SILENT_DIRECTIVE + '\n') or not prompt.endswith(SILENT_DIRECTIVE):
             errors.append('missing fixed visual-only directive at prompt beginning/end')
         signals = speech_signals(prompt.replace(SILENT_DIRECTIVE, ''))
