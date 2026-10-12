@@ -31,7 +31,9 @@ def task_worklist(bundle, task, directory):
                 project_base=str(Path(bundle['project']).parent),
                 canonical_context=str(Path(directory).resolve() / 'bundle.json'),
                 source_script=bundle['source_script'], assets=ctx['assets'],
-                review_scope=ctx.get('review_scope'), narrative_plan=ctx.get('narrative_plan'),
+                review_scope=ctx.get('review_scope'), grouping_mode=ctx.get('grouping_mode', 'automatic'),
+                **({k: copy.deepcopy(ctx[k]) for k in ('input_shot_groups', 'input_group_validation')}
+                   if ctx.get('grouping_mode') == 'input' else dict(narrative_plan=ctx.get('narrative_plan'))),
                 owned_shots=[row(s) for s in ctx['shots'] if s['shot_id'] in owned],
                 neighbor_context=[row(s) for s in ctx['shots'] if s['shot_id'] in neighbors],
                 external_boundaries=ctx.get('boundaries', []),
@@ -187,6 +189,8 @@ def collect(project, directory):
                  checks={k: 'uncertain' for k in ('shot', 'continuity', 'story')},
                  coverage=dict(shot_ids=ids, mapping_verified=False, limitations=limitations),
                  boundary_checks=[], **combined)
+    if ctx.get('grouping_mode') == 'input':
+        draft.pop('grouping_checked')
     return p, b, dict(review=draft, task_hashes=hashes, boundary_audit_required=boundaries,
                      cross_reference_audit_required=cross_refs, dispute_shot_ids=risks,
                      max_nonboundary_rechecks=MAX_DISPUTES, draft_only=True)
@@ -201,8 +205,10 @@ def coordinator_drafts(collected):
                  rechecked_shot_ids=[], deferred_shot_ids=[], accepted_shot_ids=[], resolutions=[])
     worklist = {key: copy.deepcopy(collected[key]) for key in
                 ('boundary_audit_required', 'cross_reference_audit_required', 'dispute_shot_ids', 'max_nonboundary_rechecks')}
-    worklist['pending_checks'] = ['checks', 'coverage.mapping_verified', 'grouping_checked', 'external boundary_checks',
+    worklist['pending_checks'] = ['checks', 'coverage.mapping_verified', 'external boundary_checks',
                                   'boundary reasons and verdicts', 'cross-reference reasons', 'dispute disposition']
+    if 'grouping_checked' in collected['review']:
+        worklist['pending_checks'].insert(2, 'grouping_checked')
     worklist['record_hashes'] = {field: [dict(record_hash=core.digest(row), index=i,
                                           shot_ids=(row.get('shot_ids', [row.get('shot_id')]) if isinstance(row, dict) else []))
                                      for i, row in enumerate(collected['review'].get(field, []))] for field in ROWS}

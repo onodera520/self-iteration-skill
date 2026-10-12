@@ -116,7 +116,7 @@ class ImportedReviewTests(fixtures.Base):
         planner.store_aggregation(self.p,self.path,result)
         return result
 
-    def test_three_shots_planned_duration_two_tables_and_local_thumbnails(self):
+    def test_three_shots_planned_duration_one_table_and_local_thumbnails(self):
         core.validate(self.p,self.path)
         self.mapping()
         before = copy.deepcopy(self.p)
@@ -127,8 +127,8 @@ class ImportedReviewTests(fixtures.Base):
             self.assertEqual(self.p[field],before[field])
         out = self.path.parent/'delivery'
         text = Path(boards.render(self.p,self.path,out)).read_text(encoding='utf8')
-        self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),2)
-        self.assertIn('| 总时长 |',text)
+        self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),1)
+        self.assertNotIn('| 总时长 |',text)
         self.assertIn('| 镜头时长 |',text)
         self.assertNotIn('视频结论',text)
         self.assertIn('| 检验通过 | 建议省图，未验证 | S01 + S03 |',text)
@@ -387,12 +387,12 @@ class ImportedReviewTests(fixtures.Base):
             r=self.review_data(gid=gid,middle_derivable=False)
             self.assertEqual(core.record_review(self.p,self.path,r),'PASS')
 
-    def test_threshold_note_below_exactly_two_tables(self):
+    def test_threshold_note_below_exactly_one_table(self):
         self.mapping({'S01':'absent','S03':'absent'})
         result=self.finish(self.review_data(middle_derivable=False))
         self.assertTrue(result['missing_summary'][0]['regenerate'])
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
-        self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),2)
+        self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),1)
         self.assertEqual(text.count('建议重新生成视频'),1)
         self.assertGreater(text.index('建议重新生成视频'),text.rfind('| S03 |'))
         self.assertNotIn('bad_num',text)

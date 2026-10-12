@@ -165,8 +165,9 @@ class EventGroupingTests(fixtures.Base):
         self.assertEqual(verdicts['S04'],'anchor_reviewed')
         self.assertEqual(verdicts['S07'],'anchor_reviewed')
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf-8')
-        self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),2)
-        self.assertIn(summaries['E03'],text)
+        self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),1)
+        self.assertIn(summaries['E03'],result['groups'][1]['reason'])
+        self.assertNotIn(summaries['E03'],text)
 
     def test_long_event_is_split_only_inside_event_and_explained(self):
         template=copy.deepcopy(self.p['shots'][1])

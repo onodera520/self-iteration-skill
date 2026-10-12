@@ -225,6 +225,8 @@ def input_fingerprint(p, project_path, profile):
     binding = {"source": p["source_script"], "assets": p["assets"], "shots": ss, "aspect_ratio": p.get("config", {}).get("aspect_ratio"), "video_input_mode": p.get("config", {}).get("video_input_mode", "anchors"), "profile": profile}
     if "narrative_plan" in p:
         binding["narrative_plan"] = p["narrative_plan"]
+    if p.get("input_shot_groups") is not None:
+        binding["input_shot_groups"] = p["input_shot_groups"]
     return digest(binding)
 
 
@@ -370,7 +372,7 @@ def missing_summary(groups, decisions, config):
 @verified_read
 def imported_post_review_plan(p, project_path, profile):
     from storyboard import current_frame, mapping_row
-    from grouping import partition, clip_group_list
+    from grouping import partition, clip_group_list, input_partition
     validate(p, project_path)
     # Narrative partitioning precedes anchor optimization; no paid model profile.
     effective = dict(id="content-review", source={"kind": "inference", "ref": "Beat内剧情初分、相邻合并、短段复核；4–15秒与12镜上限"},
@@ -410,32 +412,53 @@ def imported_post_review_plan(p, project_path, profile):
             s["reference"]["locked"] = True
         s["omission_assessment"] = dict(allowed=state["eligible"], risk="low" if state["eligible"] else "unknown",
             rationale=state["reason"], source={"kind": "inference", "ref": "逐镜审查与原视频补查：" + state["source_group_id"]})
-    narrative = partition(p, working["_blocked_group_starts"])
+    supplied = input_partition(p, working["_blocked_group_starts"])
+    if supplied is not None:
+        effective['source']['ref'] = '用户指定相邻分组；4–15秒、12镜、Beat及来源边界检查'
+        valid_ranges = list(supplied['valid_ranges'].values())
+        covered = {j for a, b in valid_ranges for j in range(a, b)}
+        # These singleton intervals are only an internal anchor-solver fallback.
+        # The public result below preserves the user's exact partition, including
+        # conflicts. They must never create necessary missing shots by themselves.
+        solver_ranges = sorted(valid_ranges + [(i, i+1) for i in range(len(p['shots'])) if i not in covered])
+        narrative = dict(feasible=supplied['feasible'], ranges=solver_ranges,
+                         reasons=[], trace=[dict(stage='input', conflicts=supplied['conflicts'])],
+                         limitations=supplied['limitations'])
+    else:
+        narrative = partition(p, working["_blocked_group_starts"])
     working["_narrative_ready"] = narrative["feasible"]
     # Pending input stays visible without inventing timing or a compliant group.
-    working["_narrative_ranges"] = narrative["ranges"] if narrative["feasible"] else [(i, i+1) for i in range(len(p["shots"]))]
+    working["_narrative_ranges"] = narrative["ranges"] if supplied is not None or narrative["feasible"] else [(i, i+1) for i in range(len(p["shots"]))]
     result = plan(working, project_path, effective)
     required = {r['shot_id'] for r in result['analysis']
                 if set(r['mandatory_rules']) - {'SEMANTIC_UNAPPROVED'}}
     original_shots = {s["id"]: s for s in p["shots"]}
     for n, g in enumerate(result["groups"], 1):
-        old_id = g["id"]
-        reason = narrative["reasons"][n-1] if narrative["feasible"] else '待分组：' + '；'.join(narrative["limitations"])
-        g.update(id=f"A{n:02d}" if narrative["feasible"] else f"P{n:02d}", reason=reason,
-                 planning_status="ready" if narrative["feasible"] else "pending",
+        fixed_group = next((x for x in supplied['groups'] if g['shot_ids'][0] in x['shot_ids']), None) if supplied is not None else None
+        group_ready = (bool(fixed_group and fixed_group['planning_status'] == 'ready' and fixed_group['shot_ids'] == g['shot_ids'])
+                       if supplied is not None else narrative['feasible'])
+        reason = ('用户指定分组；不自动改组。' if group_ready else '分组冲突，暂不批准省图。') if supplied is not None else (
+            narrative["reasons"][n-1] if narrative["feasible"] else '待分组：' + '；'.join(narrative["limitations"]))
+        gid = (fixed_group['id'] if fixed_group else '—') if supplied is not None else (f"A{n:02d}" if narrative["feasible"] else f"P{n:02d}")
+        g.update(id=gid, reason=reason,
+                 planning_status="ready" if group_ready else "pending",
                  duration_has_suggestion=any(original_shots[sid].get("duration_source", {}).get("kind") == "inference" for sid in g["shot_ids"]))
-        if not narrative["feasible"]:
+        if supplied is not None:
+            g['planned_duration'] = fixed_group.get('planned_duration') if fixed_group else None
+        elif not narrative["feasible"]:
             g["planned_duration"] = None
         g["source_group_ids"] = list(dict.fromkeys(states[sid]["source_group_id"] for sid in g["shot_ids"]))
         g["beat_id"] = original_shots[g["shot_ids"][0]].get("beat", {}).get("id")
         for d in result["decisions"]:
-            if d["group_id"] != old_id:
+            if d["shot_id"] not in g["shot_ids"]:
                 continue
             state = states[d["shot_id"]]
             a, verdict = state["assessment"], state["verdict"]
             d.update(group_id=g["id"], source_group_id=state["source_group_id"], frame=state["frame"],
                      mapping_status=state["mapping_status"], review_verdict=verdict, issues=state["issues"])
-            can_fill = d["mode"] == "ai_fill" and state["eligible"] and all(b in g["shot_ids"] for b in a["basis_shot_ids"])
+            if supplied is not None and not group_ready:
+                d['grouping_conflicts'] = fixed_group['conflicts'] if fixed_group else ['输入分组未包含此镜']
+            can_fill = group_ready and d["mode"] == "ai_fill" and state["eligible"] and all(b in g["shot_ids"] for b in a["basis_shot_ids"])
             if can_fill:
                 d.update(mode="ai_fill", status="absent_fill_suggested_unverified" if verdict == "absent" else "ai_fill_suggested_unverified",
                          bracket=dict(zip(("before", "after"), a["basis_shot_ids"])), reason=state["reason"])
@@ -445,12 +468,22 @@ def imported_post_review_plan(p, project_path, profile):
             else:
                 status = "mismatch" if verdict == "FAIL" else "pending"
                 if verdict == "absent" and (a.get("derivable") is False or
-                        (a.get("derivable") is True and (narrative["feasible"] or d['shot_id'] in required))):
+                        (a.get("derivable") is True and (group_ready or (supplied is None and d['shot_id'] in required)))):
                     status = "missing_required"
                 note = ""
                 if status == "missing_required":
                     note = "；必要锚点或分组约束要求保留此镜。" if a.get("derivable") is True else "；已确认缺失，省去独立图会使故事断裂、有歧义或失去必要剧情节点。"
                 d.update(mode="pending", status=status, bracket=None, reason=state["reason"] + note)
+    if supplied is not None:
+        # No solver-created split/merge escapes into the final partition.
+        result['groups'] = copy.deepcopy(supplied['groups'])
+        result['grouping_mode'] = 'input'
+        result['input_group_conflicts'] = supplied['conflicts']
+        for g in result['groups']:
+            g['source_group_ids'] = list(dict.fromkeys(states[s]['source_group_id'] for s in g['shot_ids'] if s in states))
+        for d in result['decisions']:
+            if d.get('grouping_conflicts') and d['mode'] == 'anchor':
+                d['reason'] += '；分组冲突，暂不批准省图。'
     by_id = {d["shot_id"]: d for d in result["decisions"]}
     for d in result["decisions"]:
         if d["mode"] == "ai_fill":
@@ -465,6 +498,9 @@ def imported_post_review_plan(p, project_path, profile):
                              "fill_count": sum(d["mode"] == "ai_fill" for d in result["decisions"]),
                              "pending_count": sum(d["mode"] == "pending" for d in result["decisions"]),
                              "group_count": len(result["groups"])})
+    if supplied is not None and narrative['feasible']:
+        for row, g in zip(result['clipGroupList'], supplied['groups']):
+            row['shotId'] = g['id']
     return result
 
 

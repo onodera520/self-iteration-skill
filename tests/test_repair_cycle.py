@@ -385,7 +385,7 @@ class RepairCycleTests(fixtures.Base):
         text=Path(second).read_text(encoding='utf-8')
         self.assertIn('该镜需重新生成',next(l for l in text.splitlines() if '| S01 |' in l))
         self.assertIn('一次自动返修额度已用完',text)
-        self.assertEqual(sum(l.startswith('| --- |') for l in text.splitlines()),2)
+        self.assertEqual(sum(l.startswith('| --- |') for l in text.splitlines()),1)
         self.assertEqual(before,{f:core.sha(Path(f)) for f in before})
         self.assertEqual(Path(original).name,'01_原视频审查.md')
         self.assertEqual(Path(second).name,'02_返修视频审查.md')
@@ -424,7 +424,7 @@ class RepairCycleTests(fixtures.Base):
         self.p['repair_round'] = 2
         report = repair.snapshot(self.p, self.path, self.path.parent / 'round2', 'repaired2')
         self.assertEqual(Path(report).name, '03_返修视频审查（第二轮）.md')
-        self.assertEqual(sum(l.startswith('| --- |') for l in Path(report).read_text(encoding='utf-8').splitlines()), 2)
+        self.assertEqual(sum(l.startswith('| --- |') for l in Path(report).read_text(encoding='utf-8').splitlines()), 1)
         self.assertEqual(core.sha(Path(original)), original_hash)
         self.assertTrue(repair.decide(self.p, self.path, 'G01')['automatic_allowance_used'])
         repair.submit(self.p, self.path, 'G01', api, True)

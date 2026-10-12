@@ -15,7 +15,7 @@ from repair_readiness import diagnose
 
 
 def validate_delivery(p, stage):
-    """Check immutable bytes, two tables, exact shot order, thumbnails and omission."""
+    """Check immutable bytes, declared table format, shot order and thumbnails."""
     from storyboard import text_only_fill
     record = p['repair_deliveries'][stage]
     md = Path(record['path']).resolve()
@@ -23,7 +23,10 @@ def validate_delivery(p, stage):
     core.require(all(Path(f).is_file() and core.sha(Path(f)) == h for f, h in record['files'].items()),
                  'Immutable delivery changed')
     text = md.read_text(encoding='utf-8')
-    core.require(sum(line.startswith('| --- |') for line in text.splitlines()) == 2, 'Expected exactly two tables')
+    table_count = record.get('table_count', 2)  # Frozen legacy deliveries stay immutable.
+    core.require(table_count in (1, 2), 'Unknown delivery table format')
+    core.require(sum(line.startswith('| --- |') for line in text.splitlines()) == table_count,
+                 f'Expected exactly {table_count} table(s)')
     rows = [re.split(r'(?<!\\)\|', line)[1:-1] for line in text.splitlines() if line.startswith('|')]
     rows = [r for r in rows if len(r) == 9 and r[1].strip() not in ('原镜号', '---')]
     core.require([r[1].strip() for r in rows] == [s['id'] for s in p['shots']], 'Delivery shot order/coverage changed')
@@ -44,7 +47,7 @@ def validate_delivery(p, stage):
                     core.require(img.size == (240, 168), 'Unexpected thumbnail dimensions')
                 img.verify()
         pictures += 1
-    return dict(shot_count=len(rows), thumbnail_count=pictures, table_count=2,
+    return dict(shot_count=len(rows), thumbnail_count=pictures, table_count=table_count,
                 visual_review='existing evidence-bound review; no new visual approval')
 
 
@@ -158,7 +161,7 @@ def finish(project, profile, output, run_dir, stage='original', delivery_only=Fa
                 core.save(project, candidate)
             report['status'] = ('complete' if all(d['status'] == 'complete' for d in report['decisions'].values())
                                 else 'delivery_complete_decision_blocked')
-            report['next_action'] = ('Inspect the two tables and images once, then stop unless an authorized repair is due.'
+            report['next_action'] = ('Inspect the per-shot table and images once, then stop unless an authorized repair is due.'
                                      if report['status'] == 'complete' else
                                      'Legacy delivery only; repair decision blocked. Complete review then use --revision-reason with a new output directory.')
         except Exception as exc:

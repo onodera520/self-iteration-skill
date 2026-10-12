@@ -18,7 +18,7 @@ workload 是同批估计的相对审查工作量，考虑候选/连续帧数量�
 ]
 ```
 
-units 仅是审查分工，不能覆盖 event、状态、生成来源组或最终聚合。最终仍从全脚本按三步法聚合，同 Beat 内每组 4–15 秒、≤12 镜。
+units 仅是审查分工，不能覆盖 event、状态、生成来源组或最终聚合。有 input_shot_groups 时固定采用，不按输入 Shot 数创建任务，也不允许各任务改组；无输入时最终仍从全脚本按三步法聚合。同 Beat 内每组 4–15 秒、≤12 镜。
 
 ## 冻结输入与只读工作区
 
@@ -34,7 +34,7 @@ python scripts/parallel_review.py prepare PROJECT.json G01 UNITS.json REVIEW_BUN
 
 > 先读完整脚本及共用状态基线，再读分配镜头的全部必要候选、连续帧、资产和邻接状态。只审查 owned shot_ids，邻镜用于理解衔接；按 review.md 输出逐镜结论、可见事实/解释、省图候选、问题和修复证据。观察按图片 SHA256 复用。只写指定 draft.json，不改项目、映射、资产或其他任务目录，不抽帧、不调用 API、不决定最终聚合、不增加任务。证据不足写 uncertain、所需补查区间和原因；不能凭采样断言 absent。问题与比较 ID 加任务前缀。
 
-draft.json 字段：task_id、bundle_fingerprint，及原格式的 shot_reviews、reference_assessments、evidence、asset_comparisons、issues、uncertainties、limitations；有确认问题时依 repair-assessments.md 填 repair_assessments。两份逐镜表必须各自完整覆盖 owned shot_ids 的原顺序。跨任务问题只在草稿中列本任务受影响镜号，并在 uncertainties 说明另一侧；主流程复核后合并定位。basis_shot_ids 可引用其他任务的镜号，但仅为候选，不预设对方通过。
+draft.json 字段：task_id、bundle_fingerprint，及原格式的 shot_reviews、reference_assessments、evidence、asset_comparisons、issues、uncertainties、limitations；有确认问题时依 repair-assessments.md 填 repair_assessments。shot_reviews 与 reference_assessments 两个内部列表必须各自完整覆盖 owned shot_ids 的原顺序，不是两张交付表。跨任务问题只在草稿中列本任务受影响镜号，并在 uncertainties 说明另一侧；主流程复核后合并定位。basis_shot_ids 可引用其他任务的镜号，但仅为候选，不预设对方通过。
 
 等待任务完成期间不自行重复审查它负责的镜头。任务失败只重做未完成草稿；已有草稿在冻结输入未变化时复用。一个任务持续受阻时退回串行完成该任务，仍只允许主流程写项目。
 
@@ -58,7 +58,7 @@ python scripts/parallel_review.py assemble PROJECT.json REVIEW_BUNDLE COLLECTED.
 
 --drafts-dir 必须是新目录，工具生成 FINAL_REVIEW.json、COORDINATOR_AUDIT.json 和 WORKLIST.json，预填已有记录、任务哈希和边界状态，附待办及记录哈希。全局检查保持 uncertain/false，不能直接提交为通过；不覆盖既有协调成果。
 
-在生成的 FINAL_REVIEW.json 中补齐 checks、coverage、grouping_checked、外部 boundary_checks、整体剧情关系和各疑点处理；在 COORDINATOR_AUDIT.json 中填写真实核对依据，不必重新手工拼接整份 JSON。完成后的审计示例：
+在生成的 FINAL_REVIEW.json 中补齐 checks、coverage、grouping_checked（仅自动分组要求）、外部 boundary_checks、整体剧情关系和各疑点处理；在 COORDINATOR_AUDIT.json 中填写真实核对依据，不必重新手工拼接整份 JSON。完成后的审计示例：
 
 ```json
 {

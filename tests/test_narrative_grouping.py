@@ -175,7 +175,7 @@ class NarrativeIntegrationTests(imported.fixtures.Base):
         self.assertEqual(result['groups'][0]['planned_duration'],15)
         self.assertEqual(result['decisions'][1]['status'],'absent_fill_suggested_unverified')
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
-        self.assertIn('15 秒（含建议值）',text)
+        self.assertNotIn('| 总时长 |',text)
         self.assertIn('0.2 秒（建议）',text)
         self.mapping({'S02':'uncertain'},revision=2)
         self.assertEqual(self.finish()['groups'][0]['planned_duration'],15)
@@ -255,7 +255,7 @@ class NarrativeIntegrationTests(imported.fixtures.Base):
         self.assertTrue(all(g['id'].startswith('P') for g in result['groups']))
         self.assertEqual(result['decisions'][0]['status'],'anchor_reviewed')
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
-        self.assertEqual(sum(l.startswith('| --- |') for l in text.splitlines()),2)
+        self.assertEqual(sum(l.startswith('| --- |') for l in text.splitlines()),1)
         self.assertIn('4–15秒',text)
         self.assertNotIn('| A01 |',text)
 

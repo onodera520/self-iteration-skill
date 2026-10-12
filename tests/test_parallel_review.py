@@ -64,7 +64,7 @@ class ParallelReviewTests(fixtures.Base):
             self.assertTrue(all(r['sha256'] for r in draft['evidence']))
         self.assertEqual(core.read(self.path), self.p)
 
-    def test_end_to_end_matches_serial_planning_and_two_tables(self):
+    def test_end_to_end_matches_serial_planning_and_one_table(self):
         bundle = self.prepare()
         original = copy.deepcopy(self.p)
         serial = copy.deepcopy(self.p)
@@ -85,7 +85,7 @@ class ParallelReviewTests(fixtures.Base):
         self.assertEqual(plan['groups'], expected['groups'])
         planner.store_aggregation(actual, self.path, plan)
         text = Path(storyboard.render(actual, self.path, self.path.parent/'delivery')).read_text(encoding='utf8')
-        self.assertEqual(sum(l.startswith('| --- |') for l in text.splitlines()), 2)
+        self.assertEqual(sum(l.startswith('| --- |') for l in text.splitlines()), 1)
         self.assertIn('可推导生成', text)
         self.assertLessEqual(plan['groups'][0]['planned_duration'], 15)
         self.assertFalse(Path(str(self.path)+'.lock').exists())
@@ -95,6 +95,31 @@ class ParallelReviewTests(fixtures.Base):
         self.mapping(); core.save(self.path, self.p)
         with self.assertRaisesRegex(ValueError, 'continuous event'):
             parallel.prepare(self.path, 'G01', self.units, self.bundle_dir)
+
+    def test_input_groups_skip_auto_grouping_fields_in_all_review_worklists(self):
+        import review_draft
+        self.p['input_shot_groups'] = 'mine:S01–S03'
+        self.p.pop('narrative_plan', None)
+        # Existing complete events permit independent review tasks. They do not
+        # constrain the supplied final Shot or require automatic grouping fields.
+        bundle = self.prepare()
+        ctx = bundle['context']
+        serial = review_draft.from_context(ctx)
+        self.assertNotIn('grouping_checked', serial)
+        self.assertNotIn('grouping_checked', review_draft.worklist(serial)['group'])
+        self.assertNotIn('grouping_checked', review_draft.compact_worklist(serial)['group'])
+        for task in bundle['tasks']:
+            worklist = core.read(self.bundle_dir / task['id'] / 'worklist.json')
+            self.assertEqual(worklist['input_shot_groups'], 'mine:S01–S03')
+            self.assertNotIn('narrative_plan', worklist)
+        self.assertNotIn('grouping_checked', self.collected['review'])
+        pending = parallel.coordinator_drafts(self.collected)['WORKLIST.json']['pending_checks']
+        self.assertNotIn('grouping_checked', pending)
+        self.final.pop('grouping_checked')
+        self.assertEqual(self.commit()['verdict'], 'PASS')
+        result = planner.post_review_plan(core.read(self.path), self.path, {})
+        self.assertEqual([(g['id'], g['shot_ids']) for g in result['groups']],
+                         [('mine', ['S01', 'S02', 'S03'])])
 
     def test_single_unit_serial_and_short_units_balanced_without_cutting(self):
         ctx = dict(shots=[dict(shot_id=f'S{i}',event=dict(id=f'E{i}')) for i in range(5)])

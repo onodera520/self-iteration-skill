@@ -48,7 +48,7 @@ def from_context(ctx, shot_ids=None):
                          checks={k: 'uncertain' for k in sorted(CHECKS)}, followup=''))
         references.append(dict(shot_id=sid, decision='pending', derivable=None,
                                basis_shot_ids=[], evidence_times=list(times), reason=''))
-    return dict(**{k: ctx[k] for k in ('group_id', 'version', 'video_sha256', 'context_fingerprint',
+    draft = dict(**{k: ctx[k] for k in ('group_id', 'version', 'video_sha256', 'context_fingerprint',
                                       'review_schema', 'reference_policy_version')},
                 checks={k: 'uncertain' for k in ('shot', 'continuity', 'story')},
                 grouping_checked=False, coverage=dict(shot_ids=list(ids), mapping_verified=False, limitations=[]),
@@ -56,6 +56,9 @@ def from_context(ctx, shot_ids=None):
                 issues=[], uncertainties=[], asset_comparisons=[], repair_assessments=[],
                 boundary_checks=[dict(shot_id=b['shot_id'], verdict='uncertain', observation='')
                                  for b in ctx['boundaries']])
+    if ctx.get('grouping_mode') == 'input':
+        draft.pop('grouping_checked')
+    return draft
 
 
 def worklist(draft, compact=False):
@@ -78,7 +81,7 @@ def worklist(draft, compact=False):
                           ('shot_id', 'sha256', 'time', 'observation', 'visible_facts', 'interpretation')}
                          for e in draft['evidence']]
     result['group'] = {k: copy.deepcopy(draft[k]) for k in
-                       ('checks', 'grouping_checked', 'issues', 'uncertainties', 'asset_comparisons', 'boundary_checks')}
+                       ('checks', 'grouping_checked', 'issues', 'uncertainties', 'asset_comparisons', 'boundary_checks') if k in draft}
     result['group']['mapping_verified'] = draft['coverage']['mapping_verified']
     result['group']['limitations'] = copy.deepcopy(draft['coverage']['limitations'])
     return result

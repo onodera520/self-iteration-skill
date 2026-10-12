@@ -105,7 +105,8 @@ def validate(p, project_path):
     if not config_ok:
         c = {}  # Diagnostic scope only; no project defaults are written.
     event_shots = [s for s in shot_rows if "event" in s]
-    check(not event_shots or len(event_shots) == len(shot_rows), 'shots.event', "event blocks must cover every shot or be absent for legacy projects")
+    from grouping import has_input_groups
+    check(has_input_groups(p) or not event_shots or len(event_shots) == len(shot_rows), 'shots.event', "event blocks must cover every shot or be absent for legacy projects")
     event_summaries = {}
     for s in event_shots:
         path = shot_path(s, shot_rows.index(s)) + '.event'
@@ -350,11 +351,19 @@ def video_context(p, project_path, gid):
               "duration": task.get("duration"), "assets": assets, "shots": rows, "mapping": mapping,
               "extraction": extraction, "boundaries": boundaries}
     if p.get("config", {}).get("video_source") == "imported":
+        from grouping import has_input_groups, input_partition
         result["review_schema"] = 5
         result["reference_policy_version"] = 5  # Story readability, not unique reconstruction.
         for row, shot in zip(rows, shots(p, g)):
             row["asset_ids"] = list(shot["asset_ids"])
-        result["narrative_plan"] = copy.deepcopy(p.get("narrative_plan"))
+        result["grouping_mode"] = "input" if has_input_groups(p) else "automatic"
+        if has_input_groups(p):
+            # Bind review/omission conclusions, without invalidating source video,
+            # mappings or neutral frame observations through group_fingerprint.
+            result["input_shot_groups"] = copy.deepcopy(p["input_shot_groups"])
+            result["input_group_validation"] = input_partition(p)
+        else:
+            result["narrative_plan"] = copy.deepcopy(p.get("narrative_plan"))
         result["review_scope"] = {"dialogue_text": False, "dialogue_lip_sync": False,
             "duration_accuracy": False, "visual_actions": True, "subtitles": False,
             "screen_text": False, "group_checks": ["shot", "continuity", "story"],
@@ -416,7 +425,7 @@ def delivery_current(p, project_path):
 def validate_imported_review(p, project_path, r, ctx):
     """Independent shot verdicts; absence uses a rescan, never a fabricated frame."""
     from storyboard import CHECKS, current_frame
-    if ctx.get("narrative_plan"):
+    if ctx.get("grouping_mode") != "input" and ctx.get("narrative_plan"):
         require(r.get("grouping_checked") is True, "batch review must check narrative grouping and whole-interval complexity")
     ids = [s["shot_id"] for s in ctx["shots"]]
     rows = r.get("shot_reviews", [])

@@ -50,15 +50,15 @@ assemble 加 --drafts-dir 新目录，生成 FINAL_REVIEW.json、COORDINATOR_AUD
 python scripts/finish_review.py PROJECT.json PROFILE.json --output DELIVERY_DIR --run-dir FINISH_INTERNAL_DIR
 ```
 
-审查登记完成后执行。工具持有同一项目锁，顺序完成当前审查与返修字段预检 → 规划 → 返修机读判定 → 暂存交付 → 校验两表、图片及依赖哈希 → 冻结交付记录。不启动模型、不提交付费任务。原来的单步命令继续兼容，但默认不再自行拼接会提前冻结的旧命令顺序。
+审查登记完成后执行。工具持有同一项目锁，顺序完成当前审查与返修字段预检 → 规划 → 返修机读判定 → 暂存交付 → 校验逐镜表、图片及依赖哈希 → 冻结交付记录。不启动模型、不提交付费任务。原来的单步命令继续兼容，但默认不再自行拼接会提前冻结的旧命令顺序。
 
-run-dir 必须是新的内部目录，与交付目录分开，保存 AGGREGATION.json、REPAIR_DECISIONS.json、恢复检查点 PENDING_DELIVERY.json 和含阶段耗时的 FINISH_REPORT.json。交付仍只有两表 Markdown 与图片。已存在快照只有聚合指纹和文件哈希一致时才能复用，不能把旧快照标成新结果。实际返修视频独立审查完成后才可指定 --stage repaired。
+run-dir 必须是新的内部目录，与交付目录分开，保存 AGGREGATION.json、REPAIR_DECISIONS.json、恢复检查点 PENDING_DELIVERY.json 和含阶段耗时的 FINISH_REPORT.json。交付仍只有逐镜表 Markdown 与图片。已存在快照只有聚合指纹和文件哈希一致时才能复用，不能把旧快照标成新结果。实际返修视频独立审查完成后才可指定 --stage repaired。
 
 默认缺少返修字段时报告 preflight_blocked（退出码 2），按组/镜列出缺项，不改项目、不生成或冻结交付。补齐有依据的字段，check/review 后再收尾；只是文书缺项且证据/要求未变时复用已经核对的观察，不重看全片。
 
 | 场景 | 正确入口与处理 |
 | --- | --- |
-| 常规收尾 | 上述 finish 命令；成功后只核对两表和图片一次，无新问题即停止。满足返修门槛、预检和额度时按用户持续授权自动继续一次，不另询问；当次禁止返修时停止。 |
+| 常规收尾 | 上述 finish 命令；成功后只核对逐镜表和图片一次，无新问题即停止。满足返修门槛、预检和额度时按用户持续授权自动继续一次，不另询问；当次禁止返修时停止。 |
 | 旧项目明确只交付，暂缺返修依据 | check 和 finish 均显式加 `--delivery-only`；仍校验有效审查和证据，缺项保留 delivery_complete_decision_blocked，不能当作无需返修或允许付费。不得为了绕过缺项默认使用。 |
 | 冻结后补正了审查 | 先登记有效审查，再用新交付目录、新 run-dir 和 `--revision-reason "实际补正原因"` 收尾。工具保存旧记录到 repair_delivery_history 并关联修订，旧文件必须仍通过哈希检查；不得覆盖旧目录、删除快照或清空任务/付费额度。 |
 | 暂存交付后校验失败 | 修复原因，用新 run-dir 加 `--resume-from OLD_RUN/FINISH_REPORT.json`。项目、profile、阶段、修订原因及检查点/文件哈希全部匹配时，可沿用原 output 复用暂存文件，仍重新执行当前证据与交付校验。 |
@@ -89,3 +89,5 @@ kind 可用 reviewer_wall、tool、wait，区分审查墙钟、工具处理和�
 - Windows 固定查找位置（按顺序逐个执行 `-version` 验证，跳过不存在的位置，但必须把「验证过哪些、结果如何」记入 `runtime-paths.json`；未逐项验证不得判为「本地不可用」）：Python 为 `%USERPROFILE%/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe`，再查 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/python/python.exe`；媒体工具先查 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/ffmpeg/bin/ffmpeg.exe` 和 `ffprobe.exe`，再复用 `%USERPROFILE%/.cache/storyboard-test-deps/imageio_ffmpeg/binaries/` 下的 FFmpeg 可执行文件及本机 `D:/work skill/test-tools/ffprobe.exe`，最后按通配查 `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*-full_build\bin\ffmpeg.exe`（同目录取 `ffprobe.exe`）以及 `%ProgramData%\chocolatey\bin\ffmpeg.exe`、`%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffmpeg.exe`。这些旧位置不要求配套存在，分别确认两种工具可用即可。Codex 提供运行环境定位工具时也可用其返回路径。
 - **全部本地候选均不可用时才下载缺失组件。** 新下载固定落在 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/`：Python 放 `python/`，FFmpeg/FFprobe 放 `ffmpeg/bin/`；非 Windows 使用用户缓存目录下同名稳定目录。缺 Python 模块只补模块，不重装已有解释器；缺 FFprobe 不代表已有 FFmpeg 失效。禁止把运行环境下载到任务目录、日期目录或每次新建的临时目录。下载来源采用官方或项目认可发行源，安装完成后执行上述检查，失败则报告具体缺项，不循环重复下载。
 - 主流程只探测/准备一次，将确认的绝对路径和版本写到稳定目录的 `runtime-paths.json` 供以后优先核验复用；该记录不是免检凭据，路径失效才重新探测。命令使用选定 Python 的绝对路径，并在当前进程设置 FFMPEG、FFPROBE、PYTHONUTF8=1；示例中的 `python` 均指这个解释器。子代理继承同一组路径，不单独安装；无需修改系统 PATH 或重复复制工具到项目。
+
+用户提供 Shot 分组时直接使用，跳过自动初分、相邻合并和短段复核；审查仍按原来源组批量处理，不增加逐镜判断。输入 Shot 数不增加一次自动返修额度，分组冲突不是返修理由。交付只保留一张逐镜表，分组编号仍展示。

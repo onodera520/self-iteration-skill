@@ -2,11 +2,194 @@
 from decimal import Decimal
 import re
 
-POLICY_VERSION = 3
+POLICY_VERSION = 4
 MIN_SECONDS = Decimal('4')
 MAX_SECONDS = Decimal('15')
 SHORT_SECONDS = Decimal('8')
 MAX_SHOTS = 12
+
+
+def has_input_groups(p):
+    return p.get('input_shot_groups') is not None
+
+
+def parse_input_groups(value, shot_ids):
+    """Normalize JSON, a two-column Markdown table, or A01: S01–S03 text.
+
+    Parsing never repairs the user's partition. Unknown/reversed ranges remain
+    visible to the conflict collector rather than being silently sorted.
+    """
+    import json
+    if isinstance(value, str):
+        value = value.strip()
+        if value.startswith(('[', '{')):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return [dict(id='', shot_ids=[], parse_error='分组 JSON 无法解析')]
+        else:
+            rows = []
+            for line in re.split(r'[;；\n]+', value):
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith('|'):
+                    cells = [c.strip() for c in line.strip('|').split('|')]
+                    if len(cells) >= 2 and (re.fullmatch(r'[:\- ]+', cells[0]) or cells[0] in ('分组', '分组编号', 'Shot')):
+                        continue
+                    if len(cells) >= 2:
+                        rows.append(dict(id=cells[0], shot_ids=cells[1]))
+                        continue
+                parts = re.split(r'[:：]', line, maxsplit=1)
+                rows.append(dict(id=parts[0] if len(parts) == 2 else '',
+                                 shot_ids=parts[1] if len(parts) == 2 else [],
+                                 **({} if len(parts) == 2 else {'parse_error': '分组文字需写为 A01：S01–S03'})))
+            value = rows
+    if isinstance(value, dict):
+        if 'input_shot_groups' in value:
+            return parse_input_groups(value['input_shot_groups'], shot_ids)
+        value = [value] if 'id' in value and 'shot_ids' in value else [dict(id=k, shot_ids=v) for k, v in value.items()]
+    if not isinstance(value, list):
+        return [dict(id='', shot_ids=[], parse_error='input_shot_groups 必须为分组列表、表格或文字')]
+    result = []
+    for row in value:
+        if not isinstance(row, dict):
+            result.append(dict(id='', shot_ids=[], parse_error='每个分组须有 id 和 shot_ids'))
+            continue
+        item = dict(id=row.get('id', ''), shot_ids=row.get('shot_ids', []))
+        if row.get('parse_error'):
+            item['parse_error'] = row['parse_error']
+        seq = item['shot_ids']
+        if isinstance(seq, str):
+            seq = seq.strip()
+            # A range follows the original script, not guessed numerical IDs.
+            match = re.fullmatch(r'([\w]+)\s*[–—~～-]\s*([\w]+)', seq)
+            if match:
+                first, last = match.groups()
+                if first in shot_ids and last in shot_ids:
+                    a, b = shot_ids.index(first), shot_ids.index(last)
+                    seq = shot_ids[a:b+1] if a <= b else list(reversed(shot_ids[b:a+1]))
+                else:
+                    seq = [first, last]
+                    item['parse_error'] = '范围端点不是原脚本镜号'
+            else:
+                seq = [s for s in re.split(r'[\s,，、→]+', seq) if s]
+        item['shot_ids'] = seq
+        result.append(item)
+    return result
+
+
+def input_partition(p, blocked_starts=None):
+    """Collect all fixed-partition conflicts; never mutate or fall back to auto.
+
+    None means cross-video checks are deferred until evidence-bound reviews are
+    available. An explicit collection contains boundaries not yet approved.
+    """
+    if not has_input_groups(p):
+        return None
+    shots = p['shots']
+    ids = [s['id'] for s in shots]
+    positions = {sid: i for i, sid in enumerate(ids)}
+    groups = parse_input_groups(p['input_shot_groups'], ids)
+    conflicts, ranges, owners = [], {}, {}
+
+    def problem(code, message, indexes, shot_ids=()):
+        conflicts.append(dict(code=code, message=message, group_indexes=sorted(set(indexes)), shot_ids=list(shot_ids)))
+
+    for i, g in enumerate(groups):
+        if g.get('parse_error'):
+            problem('format', g['parse_error'], [i])
+        if not isinstance(g['id'], str) or not g['id'].strip():
+            problem('group_id', '分组编号不能为空', [i])
+        seq = g['shot_ids']
+        if not isinstance(seq, list) or not seq or any(not isinstance(s, str) for s in seq):
+            problem('shot_ids', '分组须包含有序镜号列表', [i])
+            g['shot_ids'] = []
+            continue
+        unknown = [s for s in seq if s not in positions]
+        if unknown:
+            problem('unknown', '未知镜号：' + '、'.join(unknown), [i], unknown)
+        known = [s for s in seq if s in positions]
+        for sid in known:
+            owners.setdefault(sid, []).append(i)
+        indexes = [positions[s] for s in known]
+        if indexes and indexes != sorted(indexes):
+            problem('order', '组内镜号乱序', [i], known)
+        if indexes and indexes != list(range(indexes[0], indexes[0]+len(indexes))):
+            problem('nonadjacent', '组内镜头必须连续相邻且原序排列', [i], known)
+        if known and len(known) == len(seq) and indexes == list(range(indexes[0], indexes[0]+len(indexes))):
+            ranges[i] = (indexes[0], indexes[-1]+1)
+        if len(seq) > MAX_SHOTS:
+            problem('shot_limit', '每组最多12镜', [i], known)
+        durations = [shots[positions[s]].get('duration') for s in known]
+        from previs import number
+        duration_valid = all(number(d) and d > 0 for d in durations)
+        if len(known) != len(seq) or not duration_valid:
+            g['planned_duration'] = None
+            if not duration_valid:
+                problem('duration', '补齐脚本计划时长后才能批准省图', [i], known)
+        else:
+            total = sum((Decimal(str(d)) for d in durations), Decimal(0))
+            g['planned_duration'] = float(total)
+            if not MIN_SECONDS <= total <= MAX_SECONDS:
+                problem('duration', '组总时长须为4–15秒', [i], known)
+        unbound = [s for s in known if not shots[positions[s]].get('duration_source')]
+        if unbound:
+            problem('duration_source', '补齐计划时长及来源：' + '、'.join(unbound), [i], unbound)
+        if len({shots[positions[s]].get('beat', {}).get('id') for s in known}) > 1:
+            problem('beat', '不得跨 Beat 分组', [i], known)
+        if blocked_starts is not None and indexes and any(min(indexes) < b <= max(indexes) for b in blocked_starts):
+            problem('source_boundary', '跨来源视频边界尚未检验通过', [i], known)
+    for gid in {g['id'] for g in groups if isinstance(g['id'], str)}:
+        indexes = [i for i, g in enumerate(groups) if g['id'] == gid]
+        if len(indexes) > 1:
+            problem('duplicate_group', '重复分组编号：' + gid, indexes)
+    for sid, indexes in owners.items():
+        if len(indexes) > 1:
+            problem('duplicate', '镜号重复：' + sid, indexes, [sid])
+    missing = [sid for sid in ids if sid not in owners]
+    if missing:
+        problem('missing', '分组漏号：' + '、'.join(missing), [], missing)
+    # A cut may be shifted, but supplied group order must never be sorted here.
+    previous = None
+    for i, g in enumerate(groups):
+        indexes = [positions[s] for s in g['shot_ids'] if s in positions]
+        if indexes:
+            if previous and min(indexes) <= previous[1]:
+                problem('group_order', '分组顺序与原脚本不一致', [previous[0], i])
+            previous = (i, max(indexes))
+    if not groups:
+        problem('empty', '输入了空分组；不自动退回自动分组', [])
+    invalid = {i for c in conflicts for i in c['group_indexes']}
+    for i, g in enumerate(groups):
+        g.update(planning_status='pending' if i in invalid else 'ready',
+                 conflicts=[c['message'] for c in conflicts if i in c['group_indexes']])
+    return dict(mode='input', feasible=not conflicts, groups=groups,
+                valid_ranges={i: v for i, v in ranges.items() if i not in invalid},
+                conflicts=conflicts, unassigned_shot_ids=missing,
+                limitations=[('、'.join(str(groups[i]['id']) for i in c['group_indexes']) + '：' if c['group_indexes'] else '') + c['message'] for c in conflicts],
+                boundary_checks_deferred=blocked_starts is None)
+
+
+def main():
+    """Import a fixed partition under the existing project lock; no media writes."""
+    import argparse
+    import json
+    from pathlib import Path
+    from previs import locked, read, save
+    ap = argparse.ArgumentParser(description='检查或登记用户 Shot 分组；不自动修正冲突')
+    ap.add_argument('project')
+    ap.add_argument('input', help='UTF-8 分组文字、Markdown 表格或 JSON 文件')
+    ap.add_argument('--apply', action='store_true', help='只保存 input_shot_groups；冲突也原样保留')
+    args = ap.parse_args()
+    with locked(args.project):
+        p = read(args.project)
+        raw = Path(args.input).read_text(encoding='utf-8-sig')
+        p['input_shot_groups'] = parse_input_groups(raw, [s['id'] for s in p['shots']])
+        report = input_partition(p)
+        if args.apply:
+            save(args.project, p)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
 def validate_metadata(p, report=None):
@@ -28,7 +211,7 @@ def validate_metadata(p, report=None):
             report.check(sourced(s['duration_source'], ('script', 'inference')), path + '.duration_source', 'duration_source needs script/inference and ref')
             report.check(number(s.get('duration')) and s['duration'] > 0, path + '.duration', 'duration_source requires positive duration')
     data = p.get('narrative_plan')
-    if data is not None and report.kind(data, dict, 'narrative_plan'):
+    if not has_input_groups(p) and data is not None and report.kind(data, dict, 'narrative_plan'):
         report.check(sourced(data.get('source'), ('script', 'inference')), 'narrative_plan.source', 'narrative_plan source required')
         ids = [s['id'] for s in p['shots']]
         edges = data.get('boundaries')
@@ -221,3 +404,7 @@ def partition(p, blocked_starts=()):
         reasons.append(reason)
     validate_partition(p, groups)
     return dict(feasible=True, ranges=groups, reasons=reasons, trace=trace, limitations=[])
+
+
+if __name__ == '__main__':
+    main()

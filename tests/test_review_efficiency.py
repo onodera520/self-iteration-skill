@@ -105,6 +105,24 @@ class FinishTests(fixtures.Base):
         self.assertTrue(Path(result['delivery']).is_file())
         self.assertNotIn('G01', core.read(self.path).get('repair_decisions', {}))
 
+    def test_legacy_two_table_delivery_can_be_verified_without_rewriting(self):
+        self.prepare()
+        result = finish_review.finish(self.path, {}, self.output, self.run_dir)
+        p = core.read(self.path)
+        record = p['repair_deliveries']['original']
+        md = Path(result['delivery'])
+        # Build an immutable legacy fixture in the temporary test directory.
+        md.write_text('| 分组编号 | 镜头顺序 |\n| --- | --- |\n| A01 | S01 → S02 → S03 |\n\n'
+                      + md.read_text(encoding='utf-8'), encoding='utf-8')
+        record.pop('table_count', None)
+        record.pop('delivery_format_version', None)
+        record['files'][str(md)] = core.sha(md)
+        before = md.read_bytes()
+        checked = finish_review.validate_delivery(p, 'original')
+        self.assertEqual(checked['table_count'], 2)
+        self.assertEqual(checked['shot_count'], len(p['shots']))
+        self.assertEqual(md.read_bytes(), before)
+
     def test_stale_review_or_lock_cannot_produce_delivery(self):
         self.prepare()
         with core.locked(self.path), self.assertRaises(FileExistsError):

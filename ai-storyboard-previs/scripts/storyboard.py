@@ -447,7 +447,9 @@ def delivery_note(decision, review, sid, issues):
 def render_aggregation(p, project, out):
     from planner import current_aggregation
     proposal = current_aggregation(p, project)
-    groups = proposal["groups"] if proposal else p["groups"]
+    from grouping import has_input_groups, parse_input_groups
+    groups = proposal["groups"] if proposal else (parse_input_groups(p['input_shot_groups'], [s['id'] for s in p['shots']])
+                                                if has_input_groups(p) else p["groups"])
     decisions = {d["shot_id"]: d for d in proposal["decisions"]} if proposal else {}
     chosen = {}
     for s in p["shots"]:
@@ -491,69 +493,71 @@ def render_aggregation(p, project, out):
     if p.get("config", {}).get("video_source") == "imported":
         lines += ["时长采用脚本计划值，每组4–15秒；建议值单独标注。对白不作逐字或口型同步检查。", ""]
     if not proposal:
-        lines += ["聚合建议尚未生成或依据已变化，以下按视频来源分组展示，需检查。", ""]
+        label = '用户输入分组' if has_input_groups(p) else '视频来源分组'
+        lines += [f"聚合建议尚未生成或依据已变化，以下按{label}展示，需检查。", ""]
     elif not proposal["feasible"]:
-        lines += ["聚合尚未完成；P 编号仅为待分组占位，不代表已符合4–15秒及剧情边界要求。", ""]
+        if proposal.get("grouping_mode") == "input":
+            lines += ["输入分组存在冲突，原分组保留；受影响镜头暂不批准省图。", ""]
+            lines += ["分组冲突：" + esc("；".join(proposal["limitations"][:-1])), ""]
+        else:
+            lines += ["聚合尚未完成；P 编号仅为待分组占位，不代表已符合4–15秒及剧情边界要求。", ""]
     from previs import review_current
     reviews = {g["id"]: review_current(p, project, g["id"]) for g in p["groups"]}
-    lines += ["## 分组结果", "", "| 分组编号 | 镜头顺序 | 总时长 | 简短分组理由 |", "| --- | --- | --- | --- |"]
-    for g in groups:
-        total = seconds(g.get('planned_duration')) if proposal and proposal['feasible'] else '待规划'
-        if proposal and proposal['feasible'] and g.get('duration_has_suggestion'):
-            total += '（含建议值）'
-        lines.append(f"| {esc(g['id'])} | {' → '.join(esc(sid) for sid in g['shot_ids'])} | {total} | {esc(g.get('reason', '视频来源分组，待确认聚合。'))} |")
-    lines += ["", "## 逐镜审查与取舍", "", "| 分组 | 原镜号 | 镜头时长 | 脚本描述 | 小分镜图 | 检验结果 | 图片处理 | 推导依据镜号 | 问题或修改建议 |",
+    lines += ["## 逐镜审查与取舍", "", "| 分组 | 原镜号 | 镜头时长 | 脚本描述 | 小分镜图 | 检验结果 | 图片处理 | 推导依据镜号 | 问题或修改建议 |",
               "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
-    for g in groups:
-        for sid in g["shot_ids"]:
-            s, decision = shot(p, sid), decisions.get(sid, {})
-            source_group = next(x for x in p["groups"] if sid in x["shot_ids"])
-            review = reviews[source_group["id"]]
-            issues = [i for i in (review or {}).get("issues", []) if sid in i["shot_ids"]]
-            code = decision.get("status")
-            status = {"anchor_reviewed": "检验通过", "ai_fill_suggested_unverified": "检验通过",
-                      "absent_fill_suggested_unverified": "视频漏镜", "missing_required": "必要漏镜，需补生成",
-                      "mismatch": "该镜需重新生成"}.get(code, "—")
-            # Legacy group-only reviews remain conservative and cannot imply per-shot PASS.
-            if p.get("config", {}).get("video_source") != "imported" and review and review["verdict"] == "FAIL" and issues:
-                status = "需要重新生成"
-            if decision.get("review_verdict") == "absent" and code == "pending":
-                status = "视频漏镜"
-            reason = delivery_note(decision, review, sid, issues)
-            treatment, basis, label = "暂不省图", "—", "暂无有效画面"
-            if decision.get("mapping_status") == "absent":
-                label = "视频漏镜"
-            if decision.get("mode") == "ai_fill":
-                treatment, label = "建议省图，未验证", "可推导生成"
-                bracket = decision["bracket"]
-                basis = f"{bracket['before']} + {bracket['after']}"
-            elif code == "anchor_reviewed":
-                treatment = "保留图"
-            elif code == "missing_required":
-                label = "必要漏镜"
-            source = None
-            historical = False
-            if sid in chosen:
-                item, historical = chosen[sid]
-                source = image_path(project, item["path"])
-                dest = out / names[sid]
-                dest.parent.mkdir(exist_ok=True)
-                if source != dest:
-                    shutil.copy2(source, dest)
-            if text_only_fill(decision):
-                picture = "可推导生成"
-            else:
-                thumb = out / thumbnails[sid]
-                thumbnail(source, thumb, sid, label, "历史抽帧 · 证据不足" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
-                picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
-                if source:
-                    picture = f"[{picture}](<{names[sid]}>)"
-            timing = seconds(s.get('duration'), s.get('duration_source', {}).get('kind') == 'inference')
-            if s.get('duration') is not None and not s.get('duration_source') and p.get('config', {}).get('video_source') == 'imported':
-                timing += '（来源待确认）'
-            if s.get('duration', 0) and s['duration'] > 15 and p.get('config', {}).get('video_source') == 'imported':
-                reason += '；单镜超过15秒，需拆分或调整计划时长。'
-            lines.append(f"| {esc(g['id'])} | {esc(sid)} | {timing} | {esc(s['script'])} | {picture} | {status} | {treatment} | {esc(basis)} | {esc(reason)} |")
+    # Always emit original script order once, even for malformed supplied groups.
+    for s in p["shots"]:
+        sid = s["id"]
+        decision = decisions.get(sid, {})
+        display_group = decision.get("group_id") or next((g["id"] for g in groups
+                         if isinstance(g.get("shot_ids"), list) and sid in g["shot_ids"]), "—")
+        source_group = next(x for x in p["groups"] if sid in x["shot_ids"])
+        review = reviews[source_group["id"]]
+        issues = [i for i in (review or {}).get("issues", []) if sid in i["shot_ids"]]
+        code = decision.get("status")
+        status = {"anchor_reviewed": "检验通过", "ai_fill_suggested_unverified": "检验通过",
+                  "absent_fill_suggested_unverified": "视频漏镜", "missing_required": "必要漏镜，需补生成",
+                  "mismatch": "该镜需重新生成"}.get(code, "—")
+        # Legacy group-only reviews remain conservative and cannot imply per-shot PASS.
+        if p.get("config", {}).get("video_source") != "imported" and review and review["verdict"] == "FAIL" and issues:
+            status = "需要重新生成"
+        if decision.get("review_verdict") == "absent" and code == "pending":
+            status = "视频漏镜"
+        reason = delivery_note(decision, review, sid, issues)
+        treatment, basis, label = "暂不省图", "—", "暂无有效画面"
+        if decision.get("mapping_status") == "absent":
+            label = "视频漏镜"
+        if decision.get("mode") == "ai_fill":
+            treatment, label = "建议省图，未验证", "可推导生成"
+            bracket = decision["bracket"]
+            basis = f"{bracket['before']} + {bracket['after']}"
+        elif code == "anchor_reviewed":
+            treatment = "保留图"
+        elif code == "missing_required":
+            label = "必要漏镜"
+        source = None
+        historical = False
+        if sid in chosen:
+            item, historical = chosen[sid]
+            source = image_path(project, item["path"])
+            dest = out / names[sid]
+            dest.parent.mkdir(exist_ok=True)
+            if source != dest:
+                shutil.copy2(source, dest)
+        if text_only_fill(decision):
+            picture = "可推导生成"
+        else:
+            thumb = out / thumbnails[sid]
+            thumbnail(source, thumb, sid, label, "历史抽帧 · 证据不足" if historical else ("需重新生成" if status in ("该镜需重新生成", "需要重新生成") else ""))
+            picture = f"![{esc(sid)} · {esc(label if source is None else status)}](<{thumbnails[sid]}>)"
+            if source:
+                picture = f"[{picture}](<{names[sid]}>)"
+        timing = seconds(s.get('duration'), s.get('duration_source', {}).get('kind') == 'inference')
+        if s.get('duration') is not None and not s.get('duration_source') and p.get('config', {}).get('video_source') == 'imported':
+            timing += '（来源待确认）'
+        if s.get('duration', 0) and s['duration'] > 15 and p.get('config', {}).get('video_source') == 'imported':
+            reason += '；单镜超过15秒，需拆分或调整计划时长。'
+        lines.append(f"| {esc(display_group)} | {esc(sid)} | {timing} | {esc(s['script'])} | {picture} | {status} | {treatment} | {esc(basis)} | {esc(reason)} |")
     for summary in (proposal or {}).get("missing_summary", []):
         if summary["regenerate"]:
             source_group = group(p, summary["source_group_id"])

@@ -47,7 +47,7 @@ python scripts/previs.py context PROJECT.json G01 --incremental-from EVIDENCE_MO
 python scripts/previs.py review PROJECT.json GROUP_REVIEW_UPDATED.json
 ```
 
-例如只补查 S03 附近：优先查看新增证据及 S03，必要时复核 S02/S04；S01、S05–S08 在无状态/推导依赖及其他变化时复用。若 S06 的省图依赖 S03，则同时复核该依据，不能以“不相邻”为由跳过。停止条件仍是镜头定位且必要证据充分；增量流程不改变 matched/uncertain/absent、独立视觉单元、两表交付或付费限制。
+例如只补查 S03 附近：优先查看新增证据及 S03，必要时复核 S02/S04；S01、S05–S08 在无状态/推导依赖及其他变化时复用。若 S06 的省图依赖 S03，则同时复核该依据，不能以“不相邻”为由跳过。停止条件仍是镜头定位且必要证据充分；增量流程不改变 matched/uncertain/absent、独立视觉单元、逐镜表交付或付费限制。
 
 一次读完整组的脚本、requirements、资产和候选，批量匹配。每张图片记录中性的 visible_facts、独立的 interpretation 与兼容摘要 observation，按 SHA256 保存复用；同哈希仅在观察遗漏或矛盾时补看。不同帧的状态不能合成同一帧事实。回看原视频取得新信息时追加实际查看范围与观察。
 
@@ -94,7 +94,7 @@ selection 为 `{"shot_id":"S01","path":"候选路径","source":{"kind":"frame","
 
 执行时用 review_draft.py prepare 一次获取本组 context，保存完整结果、机械草稿、只读精简视图和工作单，不为每镜重新获取。先读视图中的全部候选、要求、计算状态及边界，详细证据绑定按需回查完整上下文；精简不缩小证据范围。已经按图片哈希记录的事实和解释直接复用，只对观察缺漏、矛盾或新帧补看；不能复用已失效的 PASS。审查表一次写完并登记；工具报多个字段错误时集中修正，非视觉格式错误不触发重新看全组。context 内部共享同组映射校验，操作结束仍完整重验依赖 SHA256；下一次命令重新建缓存。规划直接消费本次审查的取舍依据，不再重复逐镜问是否省图。
 
-previs.py context 一次输出全组 requirements、beat（如有）、event（初分）、planned_duration/duration_source、narrative_plan、review_scope、scene_id/continuity_id、资产及哈希、视频/帧/映射、选帧、左右来源组边界、review_schema: 5、reference_policy_version: 5、context_fingerprint 和 previous_review。分组范围为同一 Beat 内4–15秒，未给 Beat 时视为全脚本一个隐式 Beat，event 仍只作初分。串行时一次 LLM 完成全组校对、自然边界、相邻承接、整个合并区间复杂度核对、连续性与取舍依据，一次 previs.py review 保存。默认串行；仅完整事件可独立审查、工作量足以抵消协调成本且允许子任务时，按 [条件并行审查](parallel-review.md) 分配最多两个只读任务，复用同一脚本和工具计算的状态；主流程核对边界画面与状态、有限争议和跨任务省图依据，用 parallel_review.py commit 一次校验写回。通过镜头无新矛盾不重看；所有共享状态只由主流程修改。禁止逐镜 context/review；旧 storyboard.py 单镜 review 不代替此入口。事件划分以脚本行动目标及承接为准，不随视频错误改变；若发现事件标注有误，先修正完整事件字段并重新取得绑定上下文，再保存审查，不直接复制旧 PASS。有 narrative_plan 时，审查必须填写 grouping_checked: true；其含义是已核对批量剧情依据，不表示画面通过。串行路径仍是整理、匹配、审查三次判断；并行任务与协调会增加判断次数，不把三个阶段说成三次调用。
+previs.py context 一次输出全组 requirements、beat（如有）、event（自动初分）、planned_duration/duration_source、narrative_plan（仅自动分组需要）或 input_shot_groups 及集中冲突、review_scope、scene_id/continuity_id、资产及哈希、视频/帧/映射、选帧、左右来源组边界、review_schema: 5、reference_policy_version: 5、context_fingerprint 和 previous_review。分组范围为同一 Beat 内4–15秒，未给 Beat 时视为全脚本一个隐式 Beat，event 仍只作初分。串行时一次 LLM 完成全组校对、连续性与指定组内取舍依据；无输入 Shot 分组时同时核对自然边界、相邻承接及整个合并区间复杂度，一次 previs.py review 保存。默认串行；仅完整事件可独立审查、工作量足以抵消协调成本且允许子任务时，按 [条件并行审查](parallel-review.md) 分配最多两个只读任务，复用同一脚本和工具计算的状态；主流程核对边界画面与状态、有限争议和跨任务省图依据，用 parallel_review.py commit 一次校验写回。通过镜头无新矛盾不重看；所有共享状态只由主流程修改。禁止逐镜 context/review；旧 storyboard.py 单镜 review 不代替此入口。事件划分以脚本行动目标及承接为准，不随视频错误改变；若发现事件标注有误，先修正完整事件字段并重新取得绑定上下文，再保存审查，不直接复制旧 PASS。仅自动分组且有 narrative_plan 时，审查必须填写 grouping_checked: true；其含义是已核对批量剧情依据，不表示画面通过。串行路径仍是整理、匹配、审查三次判断；并行任务与协调会增加判断次数，不把三个阶段说成三次调用。
 
 优先用可用视频理解能力；否则看切点前后和镜头内部连续帧。复用已有哈希观察，只补充新证据。composition 仅用“脚本 shot_size/关键帧所需剧情信息及明确严格要求 → 已有画面描述 → 满足/违反/必要证据不足”的规则，不加开放式视觉推理或审美评判。景别名称或站位不同但必要信息清楚则 PASS；裁掉必要道具/关系则按证据 FAIL 或 uncertain。遮挡、画外和特写裁切不等于道具消失。
 
@@ -193,13 +193,13 @@ FAIL/absent 的 issues 必填 id、shot_ids、time_range、severity、problem、
 
 审查后规划只计“确认缺失且无法省去的必要镜头”为 bad_num，每份输入视频各计一次。默认至少 2 镜且占该视频应覆盖镜头数至少 20% 才给重新生成建议。2/10 触发；2/11 与 1/3 不触发。已定位的画面错误、可推导漏镜及待检查不计数，不变更脚本覆盖范围规避阈值。
 
-输出仅两表，阈值触发时在两表下加一句建议，不生成视频结论表。最终批准 ai_fill 的已有通过镜头仍展示抽帧缩略图与原图链接；仅确认漏镜且最终批准 ai_fill 时，小分镜图栏只写“可推导生成”，不输出原图、占位图片或图片链接。两者图片处理栏均写“建议省图，未验证”。可推导漏镜检验结果仍为“视频漏镜”，已有通过镜头仍为“检验通过”。候选被最终锚点约束拒绝时继续展示图片。省图不代表原视频完整，也不删脚本位置。
+输出仅一张逐镜表，阈值触发时在逐镜表下加一句建议，不生成视频结论表。最终批准 ai_fill 的已有通过镜头仍展示抽帧缩略图与原图链接；仅确认漏镜且最终批准 ai_fill 时，小分镜图栏只写“可推导生成”，不输出原图、占位图片或图片链接。两者图片处理栏均写“建议省图，未验证”。可推导漏镜检验结果仍为“视频漏镜”，已有通过镜头仍为“检验通过”。候选被最终锚点约束拒绝时继续展示图片。省图不代表原视频完整，也不删脚本位置。
 
 交付不使用“待检查”标签。集中补证后仍 uncertain/pending 的镜头，检验结果写“—”、图片处理写“暂不省图”，问题栏简述具体缺口及补查方向；已确认 absent 但推导未知的镜头仍写“视频漏镜”。这仅改变展示，不把未知改为 PASS/FAIL/absent，不影响必要漏镜计数或付费门槛。现有 reason/followup、problem/fix 和取舍理由用短句填写；渲染优先问题及处理，不重复通用规划解释与已有列的状态，多个独立问题保留，不额外调用 LLM 做摘要。详见 [固定交付](project.md#固定交付)。
 
 重选单镜帧：重看该镜及左右衔接，复用其他有效观察，以完整组结构重登记新指纹。替换整份视频：整份重新抽帧、匹配和审查，左右来源组只补查接壤边界并复用内部观察。脚本/资产/视频/依据图片/映射变更均使相关旧结论失效。previous_review 只供复用观察，不直接复制过期 PASS。
 
-证据不足先补查；仍无法确认则内部保留 uncertain，交付按上述规则显示“—”与具体缺口，不计入自动返修错误。组级审查同时填写 [repair_assessments](repair-assessments.md)，不增加逐镜往返；关键问题须有原文和同镜证据。先完成原视频两表快照，再计算独立返修阈值；自动返修最多每份来源一次，新视频完整独立审查。公开模型旧生成模式仍按 [生成恢复规则](generation.md) 处理：确认 FAIL 才登记 repair，再改提示词或拆组；三轮上限、预算、提交数、max_retries=1、.lock、submission_unknown 查询原任务逻辑不变，uncertain 不触发付费重试。
+证据不足先补查；仍无法确认则内部保留 uncertain，交付按上述规则显示“—”与具体缺口，不计入自动返修错误。组级审查同时填写 [repair_assessments](repair-assessments.md)，不增加逐镜往返；关键问题须有原文和同镜证据。先完成原视频逐镜表快照，再计算独立返修阈值；自动返修最多每份来源一次，新视频完整独立审查。公开模型旧生成模式仍按 [生成恢复规则](generation.md) 处理：确认 FAIL 才登记 repair，再改提示词或拆组；三轮上限、预算、提交数、max_retries=1、.lock、submission_unknown 查询原任务逻辑不变，uncertain 不触发付费重试。
 
 ## 三镜验收与调用数
 
@@ -207,9 +207,9 @@ S01 女孩持钥匙；S02 同场景观察无关键变化；S03 钥匙交接完�
 
 | LLM 判断 | 一次输入 | 一次输出 | 后续工具 |
 |---|---|---|---|
-| 1 完整提取 | 完整脚本、资产、输入视频信息 | 三镜 facts/state_changes/requirements/块级来源、beat（如有）、event、时长来源、narrative_plan | 状态计算、校验、登记视频、抽帧 |
+| 1 完整提取 | 完整脚本、资产、输入视频信息 | 三镜 facts/state_changes/requirements/块级来源、beat（如有）、时长来源及输入分组；仅自动分组补 event/narrative_plan | 状态计算、校验、登记视频、抽帧 |
 | 2 全组匹配 | 三镜要求、全部候选及实际时间 | 三镜映射、哈希观察、选帧理由 | 一次 map（含 selections）、prepare 保存完整上下文与精简视图 |
-| 3 全组校对与推导 | 精简视图及按需完整绑定、已存观察、连续帧/视频 | 三镜独立结论、三项总检查、证据、取舍、边界及 grouping_checked | fill 完整校验、一次组 review、一次 finish 完成规则规划与两表渲染 |
+| 3 全组校对与推导 | 精简视图及按需完整绑定、已存观察、连续帧/视频 | 三镜独立结论、三项总检查、证据、取舍及边界；仅自动分组补 grouping_checked | fill 完整校验、一次组 review、一次 finish 完成规则规划与逐镜表渲染 |
 
 上述单事件串行路径由“3 提取＋1 匹配＋3 审查”的 7 次 LLM 判断合并为 3 次；旧逐镜 context/review 共 6 次工具往返不再逐镜执行；现用 prepare 一次取上下文与表单，fill 一次恢复及校验，review 一次登记，共 3 次工具操作。fill 已检查后不再独立 check；不同版本的操作定义不同，不能把新增机械步骤混算成 LLM 提速。工具抽帧、登记和渲染另计。此为调用设计，不是实测耗时；补查如实增加判断，质量优先。
 

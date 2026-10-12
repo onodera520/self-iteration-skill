@@ -95,7 +95,8 @@ def analyze(p, old, current, evidence, review):
         if not more:
             break
         dependent.update(more)
-    if old.get("narrative_plan") != current.get("narrative_plan"):
+    if (old.get("narrative_plan") != current.get("narrative_plan") or
+            old.get("input_shot_groups") != current.get("input_shot_groups")):
         dependent.update(set(ids) - touched)
     reusable = set(ids) - touched - dependent
     ordered = lambda values: [s["id"] for s in p["shots"] if s["id"] in values]

@@ -367,7 +367,7 @@ def request_limits(p, expected):
 
 
 def snapshot(p, project, out, stage):
-    """Immutable two-table delivery; never render a fake second review."""
+    """Immutable single-table delivery; never render a fake second review."""
     import storyboard
     core.require(stage in DELIVERY_STAGES, 'Unknown delivery stage')
     core.require(planner.current_aggregation(p, project), 'Current aggregation required before delivery')
@@ -410,7 +410,8 @@ def snapshot(p, project, out, stage):
     dest.write_text(text, encoding='utf-8')
     path.unlink()
     records[stage] = dict(path=str(dest), files={str(f): core.sha(f) for f in out.rglob('*') if f.is_file()},
-                          aggregation_fingerprint=core.digest(p['aggregation']))
+                          aggregation_fingerprint=core.digest(p['aggregation']),
+                          table_count=1, delivery_format_version=2)
     return str(dest)
 
 
