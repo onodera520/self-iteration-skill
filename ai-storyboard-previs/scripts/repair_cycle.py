@@ -13,6 +13,7 @@ import repair_aspect
 import repair_reference
 
 _CURRENT_REFERENCE = object()
+_CURRENT_PLAN = object()
 
 POLICY = 3
 WORKFLOW = "2099403222661287938"
@@ -189,7 +190,13 @@ def asset_style(p, assets):
 
 
 def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snapshot=_CURRENT_REFERENCE,
-                    stored_decision=None):
+                    stored_decision=None, plan_snapshot=_CURRENT_PLAN):
+    if version == 6:
+        import repair_quality
+        source = _compose_prompt(p, project, gid, 5, input_aspect=input_aspect,
+                                 reference_snapshot=reference_snapshot, stored_decision=stored_decision)
+        plan = p.get('repair_prompt_plans', {}).get(gid) if plan_snapshot is _CURRENT_PLAN else plan_snapshot
+        return repair_quality.compile_request(plan, source, p)
     # Historical config-based requests reconstruct exactly for recovery/installation only.
     d = current_decision(p, project, gid) if stored_decision is None else stored_decision
     core.require(d['triggered'], 'Repair threshold not reached')
@@ -199,10 +206,10 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
     assessment = {s['shot_id']: s for s in d['assessments']}
     ss = core.shots(p, core.group(p, gid))
     views = repair_prompt.input_views(ss, original, resolved,
-        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version in (2, 3, 4, repair_prompt.VERSION) else {}
-    visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {})) if version in (3, 4, repair_prompt.VERSION) else None
+        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version in (2, 3, 4, 5, repair_prompt.VERSION) else {}
+    visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {})) if version in (3, 4, 5, repair_prompt.VERSION) else None
     reference, guidance = None, {}
-    if version in (4, repair_prompt.VERSION):
+    if version in (4, 5, repair_prompt.VERSION):
         reference = repair_reference.current(p, gid) if reference_snapshot is _CURRENT_REFERENCE else reference_snapshot
         guidance = repair_reference.validate(reference, d['binding'], original, [s['id'] for s in ss])
     def render_text(path, text):
@@ -313,9 +320,9 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
         result['input_aspect'] = shape
     if reference is not None:
         result['source_prompt_reference'] = copy.deepcopy(reference)
-    if version == repair_prompt.VERSION:
+    if version in (5, repair_prompt.VERSION):
         result['format_requirements'] = format_requirements
-    if version in (2, 3, 4, repair_prompt.VERSION):
+    if version in (2, 3, 4, 5, repair_prompt.VERSION):
         result['prompt_version'] = version
         if visual:
             result['visual_adaptations'] = visual.used
@@ -348,9 +355,10 @@ def validate_stored_request(p, project, task):
                  'Stored repair decision was modified')
     if 'prompt_version' in request:
         version = request['prompt_version']
-        core.require(version in (2, 3, 4, repair_prompt.VERSION), 'Unsupported repair prompt version')
+        core.require(version in (2, 3, 4, 5, repair_prompt.VERSION), 'Unsupported repair prompt version')
         expected = _compose_prompt(p, project, gid, version, input_aspect='input_aspect' in request,
-                                   reference_snapshot=request.get('source_prompt_reference'), stored_decision=d)
+                                   reference_snapshot=request.get('source_prompt_reference'), stored_decision=d,
+                                   plan_snapshot=request.get('prompt_plan'))
         request_limits(p, expected)
         core.require(request == expected, 'Inputs changed since submission; do not attach stale repair')
     else:

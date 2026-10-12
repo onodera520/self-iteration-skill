@@ -68,8 +68,8 @@ class PromptExportTests(fixtures.Base):
         self.ready()
         request = repair.make_prompt(self.p, self.path, 'G01')
         block = request['blocks'][1]
-        # Renderer fixture only: detailed/long actions must not be rewritten to
-        # satisfy the withdrawn one-second action-feasibility requirement.
+        # Historical version-5 renderer only: retain the stored text exactly.
+        # New prompts must pass the version-6 timing/conflict audit first.
         body = '人物停3秒再走，保持钥匙在右手，沿走廊走到门口后停住。'
         block.update(generation_text=body, correction='交接结果为乙持有钥匙。',
                      input_prompt_guidance=['冷光照亮门框。'],

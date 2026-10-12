@@ -101,7 +101,7 @@ run-dir 必须是新的内部目录，与交付目录分开，保存 AGGREGATION
 
 | 场景 | 正确入口与处理 |
 | --- | --- |
-| 常规收尾 | 上述 finish 命令；成功后只核对逐镜表和图片一次，无新问题即停止。满足返修门槛时同批完成提示词准备、重新 decide 后 export-prompt，然后停止；不提交生成任务。 |
+| 常规收尾 | 上述 finish 命令；成功后只核对逐镜表和图片一次，无新问题即停止。满足返修门槛时同批完成提示词准备、重新 decide，按 prompt-quality.md 用 prepare/view 和精简计划整批核对，再用 repair_quality.py finish 一次校验、登记、导出，然后停止；不重复 check/export-prompt，不提交生成任务。 |
 | 旧项目明确只交付，暂缺返修依据 | check 和 finish 均显式加 `--delivery-only`；仍校验有效审查和证据，缺项保留 delivery_complete_decision_blocked，不能当作无需返修或允许付费。不得为了绕过缺项默认使用。 |
 | 冻结后补正了审查 | 先登记有效审查，再用新交付目录、新 run-dir 和 `--revision-reason "实际补正原因"` 收尾。工具保存旧记录到 repair_delivery_history 并关联修订，旧文件必须仍通过哈希检查；不得覆盖旧目录、删除快照或清空任务/付费额度。 |
 | 暂存交付后校验失败 | 修复原因，用新 run-dir 加 `--resume-from OLD_RUN/FINISH_REPORT.json`。项目、profile、阶段、修订原因及检查点/文件哈希全部匹配时，可沿用原 output 复用暂存文件，仍重新执行当前证据与交付校验。 |

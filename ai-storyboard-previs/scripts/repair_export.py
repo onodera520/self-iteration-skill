@@ -15,10 +15,10 @@ def _sentences(parts):
 def render_prompt(p, request):
     """Render the user's plain prompt layout from a validated internal request.
 
-    Layout changes only: preserve visual text, corrections and phase-scoped
-    requirements. Do not rewrite actions to fit the existing one-second timing.
+    Version 6 uses a source-bound, audited body. Older versions retain their
+    exact assembly. Requirements keep their original keyframe phase scope.
     """
-    assets = {a['id']: a for a in p['assets']}
+    assets = {a['id']: a for a in (request['asset_descriptions'] if request.get('prompt_version') == 6 else p['assets'])}
     adaptations = request.get('visual_adaptations', {})
 
     def visual(path, source):
@@ -31,15 +31,20 @@ def render_prompt(p, request):
         mapping.append(f'图{i}是{_line(description) or aid}')
     lines = ['，'.join(mapping) + '，以下内容是具体的分镜脚本：']
     for i, block in enumerate(request['blocks'], 1):
-        body = [block['generation_text']]
-        if block.get('correction'):
-            body.append(block['correction'])
-        body.extend(block.get('input_prompt_guidance', []))
-        body.extend(block.get('critical_changes', []))
+        compiled = request.get('prompt_version') == 6
+        body = [block['compiled_content'] if compiled else block['generation_text']]
+        if not compiled:
+            if block.get('correction'):
+                body.append(block['correction'])
+            body.extend(block.get('input_prompt_guidance', []))
+            body.extend(block.get('critical_changes', []))
         target = block.get('keyframe_target')
         if target:
             phase = {'entry': '起态', 'action': '动作中', 'exit': '终态'}[target['phase']]
-            body.append(f'{phase}画面：{target["description"]}；以下必须／不得出现仅约束该时刻，完整动作仍按正文先后呈现')
+            if compiled:
+                body.append(f'以下必须／不得出现仅约束{phase}目标时刻，完整动作仍按正文先后呈现')
+            else:
+                body.append(f'{phase}画面：{target["description"]}；以下必须／不得出现仅约束该时刻，完整动作仍按正文先后呈现')
         line = (f'镜头{i},【时长】1s。【镜头设计】{_line(block["design"]).rstrip("。")}。'
                 f'【镜头内容】{_sentences(body)}')
         for name, label in (('must_have', '本镜必须出现'), ('must_not_have', '本镜不得出现')):
@@ -70,6 +75,15 @@ def render_prompt(p, request):
 def export_prompt(p, project, gid, output):
     import repair_cycle as repair
 
+    # Standalone exports still reconstruct against current evidence. The combined
+    # finish command builds the same request once under its existing project lock.
+    return _export_request(p, project, gid, output, repair.make_prompt(p, project, gid))
+
+
+def _export_request(p, project, gid, output, request):
+    """Internal writer for a freshly compiled request, under the caller's lock."""
+    import repair_cycle as repair
+
     project, output = Path(project).resolve(), Path(output).resolve()
     core.require(output.suffix.lower() == '.md', 'Prompt delivery must be a Markdown file')
     frozen = list(p.get('repair_deliveries', {}).values())
@@ -78,7 +92,7 @@ def export_prompt(p, project, gid, output):
                  'Use a separate prompt directory outside frozen deliveries')
     # Reuse the complete source/evidence/visual-text checks. Workflow availability,
     # provider limits and payment allowance are not prerequisites for a text export.
-    request = repair.make_prompt(p, project, gid)
+    repair_prompt.validate(request, [block['shot_id'] for block in request['blocks']])
     content = render_prompt(p, request)
     core.require(not output.exists() or output.read_text(encoding='utf-8') == content,
                  'Prompt delivery already exists with different content; choose a new output path')

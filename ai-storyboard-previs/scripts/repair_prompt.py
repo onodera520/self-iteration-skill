@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import re
 
-VERSION = 5
+VERSION = 6
 SILENT_DIRECTIVE = ('只生成无声画面。人物不说话，不做说话口型；'
     '不得生成任何人声、对白、旁白、OS/VO、音乐或音效；'
     '不得出现字幕、对白文字、台词文字或其他新增屏幕文字。'
@@ -136,11 +136,17 @@ def validate(request, shot_ids):
     total = Decimal(0)
     for block in blocks:
         sid = block.get('shot_id', '?')
-        body = block.get('generation_text', '')
+        body = block.get('compiled_content' if request.get('prompt_version') == 6 else 'generation_text', '')
         if not isinstance(body, str) or not body.strip():
             errors.append(f'{sid}: empty shot content')
-        elif body not in prompt:
-            errors.append(f'{sid}: shot content missing from prompt')
+        else:
+            # Version 6's canonical renderer folds layout whitespace and closes
+            # the body with one full stop. Keep the exact source in the snapshot;
+            # compare its delivered form instead of forcing an unnecessary edit.
+            rendered_body = (' '.join(body.split()).rstrip('。') + '。'
+                             if request.get('prompt_version') == 6 else body)
+            if rendered_body not in prompt:
+                errors.append(f'{sid}: shot content missing from prompt')
         if block.get('must_have') or block.get('must_not_have'):
             frame = block.get('keyframe_target') or {}
             if frame.get('phase') not in ('entry', 'action', 'exit') or not frame.get('description', '').strip():
@@ -157,7 +163,7 @@ def validate(request, shot_ids):
             errors.append('generation duration sum differs from request')
     except InvalidOperation:
         errors.append('invalid request duration')
-    if request.get('prompt_version') in (3, 4, VERSION):
+    if request.get('prompt_version') in (3, 4, 5, VERSION):
         if not prompt.startswith(SILENT_DIRECTIVE + '\n') or not prompt.endswith(SILENT_DIRECTIVE):
             errors.append('missing fixed visual-only directive at prompt beginning/end')
         signals = speech_signals(prompt.replace(SILENT_DIRECTIVE, ''))

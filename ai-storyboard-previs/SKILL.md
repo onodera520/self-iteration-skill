@@ -15,6 +15,8 @@ description: 根据用户的视频、脚本、资产图及可选 Shot 分组，�
 
 返修提示词使用独立的纯视觉视图：原脚本保留对白与 OS/VO，发送给模型的文本只表达已有动作、表情和剧情关系，不含台词原句、说话表演、声音或字幕指令。含此类内容的字段在返修准备中一次转换并绑定来源；无法保留关键剧情时停止。规则与字段见 [受控提示词](references/auto-repair.md#受控提示词)。
 
+首次交付前核对完整来源，按需要编排正文：原表达已清楚且涵盖来源时直接保留，不为达成“全部重写”换同义句；PASS/uncertain 也须消除实际歧义，不能只看 FAIL。工具保留未改正文，代理只填改动及必要处理说明，同批完成剧情、道具、阶段、空间、可见性、资产、时长与冲突九项检查。冻结原文及原有修正权限不变，不把个案内容或想象错误写成普遍禁令。见 [通用提示词编排](references/prompt-quality.md)。
+
 ## 按阶段读取
 
 先读当前阶段需要的文件，已读且未变的规则直接复用，回查时只定位必要段落；不提前展开所有链接、历史记录或返修资料。FAIL/absent 所需的返修证据字段仍须当批填写，但未触发阈值不通读 auto-repair.md、不准备返修提示词。
@@ -24,7 +26,7 @@ description: 根据用户的视频、脚本、资产图及可选 Shot 分组，�
 | 整理与准备 | [项目约定](references/project.md)、[镜头要求](references/shot-requirements.md)、[已有视频模板](assets/imported-project.json) | 首次探测环境读 [执行提效](references/efficiency.md#环境探测与复用)；事实定义不清读 [事实规则](references/facts-and-planner.md) |
 | 匹配与审查 | [审查规则](references/review.md)、[精简工作单](references/efficiency.md#工作清单与协调草稿) | FAIL/absent 读 [返修证据字段](references/repair-assessments.md)；确有并行收益且允许子任务时读 [条件并行](references/parallel-review.md) |
 | 聚合与交付 | [规划规则](references/planning.md)、项目约定的交付部分、执行提效的收尾部分 | 失败时只读对应恢复说明 |
-| 阈值触发后提示词交付 | [提示词与历史任务](references/auto-repair.md) | 达阈值才整理返修资产风格及纯视觉转换；纯文本导出不需要 RunningHub 技能、密钥或付费额度 |
+| 阈值触发后提示词交付 | [首次交付前编排](references/prompt-quality.md)、[提示词与历史任务](references/auto-repair.md)的“受控提示词（含资产风格）”“默认导出与交付” | 有旧提示词才读对应参考节；仅用户要求执行／恢复才读历史付费节。纯文本导出不需要 RunningHub 技能、密钥或付费额度 |
 
 ## 默认执行顺序
 
@@ -32,7 +34,7 @@ description: 根据用户的视频、脚本、资产图及可选 Shot 分组，�
 2. **一次准备、全组匹配。** 使用 prepare_imported.py run 串行完成校验、视频登记、基线冻结与稀疏抽帧，不先重复独立 validate。来源组列明视频应覆盖的连续镜头，不等于最终聚合组。prepare-map 生成当前证据的帧编号视图和匹配工作单；一次批量填写镜号、帧号、匹配状态、单帧 observation/visible_facts 及选帧理由。map --view 恢复真实路径、实际时间和 SHA256，在原校验及同一锁内登记映射和选帧；证据变化后拒绝旧编号。不逐镜 map/select/context，也不由工具判断画面。
 3. **集中补证。** 看完首轮稀疏表后，一次列齐已知的 uncertain、瞬时动作、关键结果、状态冲突和边界疑点，合并范围，用同一次 extract 的多个 --dense-range 局部加密或集中回看。已知瞬时动作直接用适合的步长，争取稀疏＋集中补证两轮完成；新疑点继续补证，不设两轮硬上限、不减少必要连续帧。稀疏抽帧不能证明漏镜；absent 必须有完整视频回看或连续全片覆盖记录。找到镜头后替换错误选帧；证据仍不足则内部保留 uncertain，交付写具体缺口。事实按精确哈希复用，解释冲突时重新核对。仅细节不清才用 crop.py 生成内部局部放大图，原帧绑定不变。
 4. **一次组级审查。** prepare 同时保存完整上下文、只读精简视图、机械草稿和精简工作单。小组读完整视图；大组用 read --index 后按事件或镜号分段读取，保留所选镜头全部候选、要求、完整计算状态、邻镜及边界，明确列出本次未读内容。读取范围不缩小审查范围，全部必要证据读完后仍一次填写完整组；详细绑定按需回查完整上下文。工作单逐镜明确填写检查、判定、identity_reason、取舍和推导理由，逐帧补解释；已有中性事实可显式复用。FAIL/absent 必须补完整返修依据，其他镜头不带空返修表。fill 已包含原完整校验，成功后一次 review 登记；不额外重复 check，不逐镜审查，也不由空字段自动推定 PASS。
-5. **一次收尾。** finish_review.py 串行完成预检、规划、机读返修判定、渲染、交付校验及冻结。有输入分组时固定采用，只在无冲突组内批准省图；否则工具依次完成剧情自然初分、相邻合并、短段复核。最终组内再选参考图。成功后核对逐镜表和图片一次，有新问题才重做。达到阈值的来源，在同一准备批次补齐资产风格、纯视觉转换及可选原提示词筛选，重新 decide 后用 export-prompt 导出 Markdown，并停止。提示词另放新目录，不修改冻结交付。未触发不强制输出新提示词；准备受阻说明缺项，不伪造提示词。冻结后补正使用新目录及关联修订，保留原交付；失败依恢复报告继续。
+5. **一次收尾。** finish_review.py 串行完成预检、规划、机读返修判定、渲染、交付校验及冻结。有输入分组时固定采用，只在无冲突组内批准省图；否则工具依次完成剧情自然初分、相邻合并、短段复核。最终组内再选参考图。成功后核对逐镜表和图片一次，有新问题才重做。达到阈值的来源，在同一准备批次补齐资产风格、纯视觉转换及可选原提示词筛选，重新 decide；repair_quality.py prepare 生成去重阅读视图与精简草稿。代理同批核对全镜、只填必要改动及处理说明、完成九项检查，finish 在同一锁内一次校验、登记并导出 Markdown，然后停止。不重复通读 source、手写最终 Markdown、逐项复制引文或新增逐镜调用；具体来源有疑问才按路径回查完整快照。提示词另放新目录，不修改冻结交付。未触发不强制输出新提示词；硬冲突或准备受阻说明缺项，不伪造提示词。冻结后补正使用新目录及关联修订，保留原交付；失败依恢复报告继续。
 
 ```text
 python scripts/prepare_imported.py preflight --script SCRIPT.txt --video INPUT.mp4 --asset A.png
@@ -51,7 +53,9 @@ python scripts/previs.py review PROJECT.json COMPLETED_REVIEW.json
 python scripts/finish_review.py PROJECT.json PROFILE.json --output DELIVERY_DIR --run-dir FINISH_INTERNAL_DIR
 # 仅达到阈值且完成提示词准备后：
 python scripts/repair_cycle.py decide PROJECT.json G01
-python scripts/repair_cycle.py export-prompt PROJECT.json G01 --output PROMPT_DELIVERY_DIR/G01_新视频提示词.md
+python scripts/repair_quality.py prepare PROJECT.json G01 PROMPT_INTERNAL_DIR/PROMPT_PLAN.json
+# 代理读取 PROMPT_PLAN.view.json，整批填写精简计划并解决冲突后：
+python scripts/repair_quality.py finish PROJECT.json G01 PROMPT_INTERNAL_DIR/PROMPT_PLAN.json --output PROMPT_DELIVERY_DIR/G01_新视频提示词.md
 ```
 
 `python` 指已验证的解释器。只有提供了 Shot 分组才运行 grouping.py 导入行；省略 --apply 可只检查。PROFILE.json 在已有视频模式可为 `{}`。JSON、上下文和工作单均由代理维护，留内部目录，用户无需填写。多来源逐份判断和导出，不按 Shot 数增加生成任务。需要详细可选字段时编辑完整草稿并 check；旧工作单可用 `--legacy-worklist`，原单步入口继续兼容。

@@ -44,6 +44,10 @@ class FakeWorkflow:
 
 
 class RepairCycleTests(fixtures.Base):
+    # These assembly/lifecycle contracts exercise saved version-5 requests.
+    # Current version-6 preparation and recovery are covered by the integration
+    # tests with real project bindings in test_repair_quality_integration.py.
+    prompt_version = 5
     png = imported_fixtures.ImportedReviewTests.png
     select_mapping = imported_fixtures.ImportedReviewTests.select_mapping
     mapping = imported_fixtures.ImportedReviewTests.mapping
@@ -51,6 +55,9 @@ class RepairCycleTests(fixtures.Base):
     finish = imported_fixtures.ImportedReviewTests.finish
     def setUp(self):
         imported_fixtures.ImportedReviewTests.setUp(self)
+        version = patch.object(repair_prompt, 'VERSION', getattr(self, 'prompt_version', 5))
+        version.start()
+        self.addCleanup(version.stop)
         # Synthetic video bytes cannot be probed. The real-media tests exercise ffprobe.
         self.aspect_probe = patch.object(repair_aspect, 'probe', return_value={
             'streams': [dict(codec_type='video', width=1920, height=1080, sample_aspect_ratio='1:1')]})
