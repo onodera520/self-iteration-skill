@@ -237,8 +237,28 @@ class TimingTests(fixtures.Base):
         path = self.path.parent / 'TIMING.json'
         review_timing.mark(path, 'start', 'T01')
         with self.assertRaises(ValueError): review_timing.mark(path, 'start', 'T01')
-        review_timing.mark(path, 'end', 'T01')
-        with self.assertRaises(ValueError): review_timing.mark(path, 'end', 'T01')
+        completed = review_timing.mark(path, 'end', 'T01')
+        before = path.read_bytes()
+        with patch.object(review_timing, 'utc_now', side_effect=AssertionError('must not retime')), \
+             patch.object(core, 'save', side_effect=AssertionError('must not rewrite')):
+            self.assertEqual(review_timing.mark(path, 'end', 'T01'), completed)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(Path(str(path)+'.lock').exists())
+
+    def test_idempotent_end_does_not_hide_missing_failed_or_invalid_actions(self):
+        path = self.path.parent / 'TIMING.json'
+        review_timing.mark(path, 'start', 'failed')
+        review_timing.mark(path, 'fail', 'failed', reason='actual error')
+        review_timing.mark(path, 'start', 'complete')
+        review_timing.mark(path, 'end', 'complete')
+        before = path.read_bytes()
+        for action, phase, kwargs in [('end', 'missing', {}), ('end', 'failed', {}),
+                                     ('fail', 'failed', {'reason': 'repeat'}),
+                                     ('fail', 'complete', {'reason': 'changed'}),
+                                     ('end', 'complete', {'retry_of': 'failed'})]:
+            with self.subTest(action=action, phase=phase, kwargs=kwargs), self.assertRaises(ValueError):
+                review_timing.mark(path, action, phase, **kwargs)
+            self.assertEqual(path.read_bytes(), before)
         self.assertFalse(Path(str(path)+'.lock').exists())
 
     def test_failed_time_and_retry_are_preserved(self):

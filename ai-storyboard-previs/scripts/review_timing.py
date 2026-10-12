@@ -47,8 +47,10 @@ def mark(path, action, phase, kind='reviewer_wall', reason=None, retry_of=None):
                 row['retry_of'] = retry_of
             data['phases'].append(row)
         else:
-            core.require(found and found['status'] == 'running', 'no running phase to end')
             core.require(not retry_of, 'retry-of belongs on start')
+            if action == 'end' and found and found['status'] == 'complete':
+                return data  # Repeated end preserves the original timestamps and file.
+            core.require(found and found['status'] == 'running', 'no running phase to end')
             core.require(action != 'fail' or (isinstance(reason, str) and reason.strip()), 'failure reason required')
             found.update(ended_at=utc_now(), status='failed' if action == 'fail' else 'complete')
             if action == 'fail':

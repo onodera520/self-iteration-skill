@@ -1,5 +1,6 @@
 """Fixed user Shot partitions; visual judgments in fixtures are simulated."""
 import copy
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,12 @@ class InputParsingTests(fixtures.Base):
         self.assertEqual(self.p, before)
         self.assertFalse(report['feasible'])
         self.assertEqual(report['groups'][0]['shot_ids'], ['S03', 'S01', 'S99'])
+
+    def test_public_partition_is_stable_after_json_roundtrip(self):
+        self.p['input_shot_groups'] = 'A01:S01–S02；A02:S03–S04'
+        report = grouping.input_partition(self.p)
+        self.assertEqual(report['valid_ranges'], {'0': [0, 2], '1': [2, 4]})
+        self.assertEqual(json.loads(json.dumps(report)), report)
 
     def test_exact_limits_and_missing_metadata(self):
         self.p['shots'] = self.p['shots'][:3]

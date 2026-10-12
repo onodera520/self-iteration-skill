@@ -33,12 +33,14 @@ class NarrativeToleranceTests(fixtures.Base):
         r['evidence'][1].update(
             visible_facts=['较近景别，两人左右投影与脚本不同', '同一房间，女孩仍握唯一钥匙，两人互相观察'],
             interpretation='景别、姿势和站位有偏差，但观察关系与交接前状态清楚，无严格站位要求')
-        r['shot_reviews'][1]['reason'] = '剧情等效：角色、地点、持物和观察关系成立'
+        r['shot_reviews'][1]['reason'] = '景别与视线有差异，但角色、持物和观察关系成立。'
         result = self.finish(r)
         self.assertEqual(result['decisions'][1]['status'], 'anchor_reviewed')
         text = Path(boards.render(self.p, self.path, self.path.parent/'delivery')).read_text(encoding='utf8')
         row = next(line for line in text.splitlines() if '| S02 |' in line)
         self.assertIn('| 检验通过 |', row)
+        self.assertIn('景别与视线有差异，但角色、持物和观察关系成立', row)
+        self.assertNotIn('。；', row)
         self.assertNotIn('该镜需重新生成', text)
         # Tolerance does not rewrite the source or reduce planned duration.
         self.assertEqual(self.p['shots'][1]['shot_size'], '中景')

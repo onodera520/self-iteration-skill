@@ -254,7 +254,7 @@ class ScopedMatchingTests(fixtures.Base):
             storyboard.record_matching_worklist(self.p, self.path, view, edits)
         self.assertEqual(self.p, before)
 
-    def test_cli_prepares_readonly_then_maps_and_reads_complete_scope(self):
+    def assert_cli_roundtrip(self):
         view, edits, legacy = self.matching()
         core.save(self.path, self.p)
         before = self.path.read_bytes()
@@ -272,6 +272,24 @@ class ScopedMatchingTests(fixtures.Base):
         read = self.cli(review_draft, 'read', self.path, root/'view.json', '--event', 'E01')
         self.assertEqual(read.returncode, 0, read.stderr)
         self.assertEqual(json.loads(read.stdout)['primary_shot_ids'], ['S01', 'S02', 'S03'])
+        return root
+
+    def test_cli_prepares_readonly_then_maps_and_reads_complete_scope(self):
+        self.assert_cli_roundtrip()
+
+    def test_input_groups_support_official_cli_roundtrip_and_still_reject_stale_views(self):
+        self.p['input_shot_groups'] = 'A01:S01–S03'
+        root = self.assert_cli_roundtrip()
+        changed = core.read(self.path)
+        changed['input_shot_groups'] = 'A02:S01–S03'
+        core.save(self.path, changed)
+        before = self.path.read_bytes()
+        mapped = self.cli(storyboard, 'map', self.path, root/'match-work.json', '--view', root/'match-view.json')
+        self.assertNotEqual(mapped.returncode, 0)
+        self.assertIn('stale matching', mapped.stderr)
+        read = self.cli(review_draft, 'read', self.path, root/'view.json', '--shots', 'S02')
+        self.assertNotEqual(read.returncode, 0)
+        self.assertEqual(self.path.read_bytes(), before)
 
 
 if __name__ == '__main__':

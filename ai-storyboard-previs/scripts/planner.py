@@ -415,7 +415,7 @@ def imported_post_review_plan(p, project_path, profile):
     supplied = input_partition(p, working["_blocked_group_starts"])
     if supplied is not None:
         effective['source']['ref'] = '用户指定相邻分组；4–15秒、12镜、Beat及来源边界检查'
-        valid_ranges = list(supplied['valid_ranges'].values())
+        valid_ranges = [tuple(span) for span in supplied['valid_ranges'].values()]
         covered = {j for a, b in valid_ranges for j in range(a, b)}
         # These singleton intervals are only an internal anchor-solver fallback.
         # The public result below preserves the user's exact partition, including

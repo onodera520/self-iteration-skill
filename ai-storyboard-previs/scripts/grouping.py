@@ -165,7 +165,8 @@ def input_partition(p, blocked_starts=None):
         g.update(planning_status='pending' if i in invalid else 'ready',
                  conflicts=[c['message'] for c in conflicts if i in c['group_indexes']])
     return dict(mode='input', feasible=not conflicts, groups=groups,
-                valid_ranges={i: v for i, v in ranges.items() if i not in invalid},
+                # Public contexts must compare identically after a JSON round trip.
+                valid_ranges={str(i): list(v) for i, v in ranges.items() if i not in invalid},
                 conflicts=conflicts, unassigned_shot_ids=missing,
                 limitations=[('、'.join(str(groups[i]['id']) for i in c['group_indexes']) + '：' if c['group_indexes'] else '') + c['message'] for c in conflicts],
                 boundary_checks_deferred=blocked_starts is None)

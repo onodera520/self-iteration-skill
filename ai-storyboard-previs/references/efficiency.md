@@ -10,7 +10,23 @@
 
 在稀疏联系表上按脚本顺序完成全组粗匹配，初轮每镜选 1–3 个候选；需要辨认的画面再看原图。每个已看候选立即记录单帧事实，明确镜头不在下一阶段重新从头搜片。联系表不足以看清的内容不得据缩略图作肯定判断。
 
-整组定位后，一次整理补查范围：动作过程/瞬时结果、状态冲突、疑似漏镜、无法定位、边界不清。合并重叠时间段后批量局部补帧；动作检查保留连续证据，充分即停止。未发现上述疑点也仍须逐镜审查及相邻承接检查；这只是查看顺序，不是自动跳过或判 PASS。未完整回看或取得全片连续覆盖不能判 absent。改变选帧或出现新矛盾时按状态、省图依据及边界依赖增量复核，不限于左右一镜。
+看完首轮稀疏表后，一次列齐已知补查范围：动作过程/瞬时结果、状态冲突、疑似漏镜、无法定位、边界不清。合并重叠时间段后用重复 --dense-range 一次局部补帧，避免先补一个疑点、再补另一个已知疑点。已知瞬时动作直接用适合的步长；目标为稀疏＋集中补证两轮，并非硬上限，新疑点照常追加。动作检查保留连续证据，充分即停止。未发现上述疑点也仍须逐镜审查及相邻承接检查；这只是查看顺序，不是自动跳过或判 PASS。未完整回看或取得全片连续覆盖不能判 absent。改变选帧或出现新矛盾时按状态、省图依据及边界依赖增量复核，不限于左右一镜。
+
+```text
+python scripts/media.py extract INPUT.mp4 EVIDENCE_MORE --project PROJECT.json --group G01 --base-evidence EVIDENCE_DIR/evidence.json --dense-range 2.45:3.70 --dense-range 5.9:7.3 --dense-step 0.06
+```
+
+上例仅适用于这两段均需细看瞬时动作的情况；一般局部补查沿用默认步长，不能把 0.06 秒推广成全片默认采样。默认只看新增联系表，原有事实按哈希复用，不为减少目录而覆盖旧证据。
+
+### 局部放大只作查看辅助
+
+先用联系表定位，再看必要候选原图；只有原图局部仍难辨认才裁切，不对全体帧重复裁图。使用现成工具代替临时内联脚本：
+
+```text
+python scripts/crop.py FRAME.png --box 120 80 480 420 --scale 2 --output INTERNAL/crops/S04_detail.png
+```
+
+box 是原图像素的左、上、右、下坐标，必须在图内；scale 为有限正数。输出必须是新的内部文件，工具拒绝覆盖原图或已有文件，不修改项目、映射及选帧。裁图没有新增视觉信息，不是独立证据；判断仍引用原帧 SHA256、来源视频和实际时间，必要时回查原图上下文。不得将放大图当成新的抽帧登记或交付分镜。
 
 默认先生成匹配编号与工作单，再一次登记整组：
 
@@ -77,7 +93,7 @@ assemble 加 --drafts-dir 新目录，生成 FINAL_REVIEW.json、COORDINATOR_AUD
 python scripts/finish_review.py PROJECT.json PROFILE.json --output DELIVERY_DIR --run-dir FINISH_INTERNAL_DIR
 ```
 
-审查登记完成后执行。工具持有同一项目锁，顺序完成当前审查与返修字段预检 → 规划 → 返修机读判定 → 暂存交付 → 校验逐镜表、图片及依赖哈希 → 冻结交付记录。不启动模型、不提交付费任务。原来的单步命令继续兼容，但默认不再自行拼接会提前冻结的旧命令顺序。
+审查登记完成后执行。首次填写工作单时就将重要允许差异和理由写入 shot_reviews.reason，FAIL/absent 仍补完整返修依据；不要等冻结后才补透明说明。表格问题栏呈现已有短说明，不以句号和分号机械拼出“。；”。工具持有同一项目锁，顺序完成当前审查与返修字段预检 → 规划 → 返修机读判定 → 暂存交付 → 校验逐镜表、图片及依赖哈希 → 冻结交付记录。不启动模型、不提交付费任务。原来的单步命令继续兼容，但默认不再自行拼接会提前冻结的旧命令顺序。
 
 run-dir 必须是新的内部目录，与交付目录分开，保存 AGGREGATION.json、REPAIR_DECISIONS.json、恢复检查点 PENDING_DELIVERY.json 和含阶段耗时的 FINISH_REPORT.json。审查交付仍只有逐镜表 Markdown 与图片；触发阈值时另在独立新目录交付新视频提示词 MD，不修改冻结目录。已存在快照只有聚合指纹和文件哈希一致时才能复用，不能把旧快照标成新结果。实际返修视频独立审查完成后才可指定 --stage repaired。
 
@@ -104,7 +120,7 @@ python scripts/review_timing.py start TIMING.json finish_2 --retry-of finish_1 -
 python scripts/review_timing.py report TIMING.json
 ```
 
-默认从任务开始记录 total 墙钟，并为实际发生的 preparation、matching、review、supplement、finish 记录 start/end；条件并行时另记 review_T01、review_T02、coordination。阶段名不可重复；失败用 fail 结束并写真实原因，重试用新阶段 ID 和 --retry-of 指向失败记录，不删除失败时间。示例 fail 前必须已有同名 start。finish/prepare 的内部工具耗时自动记录，不能补造过去未打点的视觉审查时间。只读审查任务若需自行计时，应使用各自工作区的独立日志；也可由主流程记录从派发到收集的墙钟，其中包含等待。不得让多个任务随意写同一文件。
+默认从任务开始记录 total 墙钟，并为实际发生的 preparation、matching、review、supplement、finish 记录 start/end；条件并行时另记 review_T01、review_T02、coordination。start 的阶段名不可重复；已 complete 的同阶段重复 end 为幂等操作，直接返回原记录，不改结束时间、耗时或文件。未知或已 failed 的阶段不能 end；失败用 fail 结束并写真实原因，重试用新阶段 ID 和 --retry-of 指向失败记录，不删除失败时间。示例 fail 前必须已有同名 start。finish/prepare 的内部工具耗时自动记录，不能补造过去未打点的视觉审查时间。只读审查任务若需自行计时，应使用各自工作区的独立日志；也可由主流程记录从派发到收集的墙钟，其中包含等待。不得让多个任务随意写同一文件。
 
 kind 可用 reviewer_wall、tool、wait，区分审查墙钟、工具处理和明确等待。日志报告已结束区间（含失败）的并集与跨度、失败及重试关系，不累加重叠任务；未结束阶段单独列出。未完整打点不能推算纯模型思考时间。finish 的计时只代表工具处理，不代表整个审查耗时。
 

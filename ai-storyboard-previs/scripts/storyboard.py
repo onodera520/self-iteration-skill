@@ -547,7 +547,8 @@ def delivery_note(decision, review, sid, issues):
         return join([row.get("reason"), row.get("followup")])
     if not review:
         return "缺少当前有效审查，需核对本镜。"
-    return join([decision.get("reason")]) or "缺少当前有效审查，需核对本镜。"
+    return join([row.get("reason") if row.get("verdict") == "PASS" else None,
+                 decision.get("reason")]) or "缺少当前有效审查，需核对本镜。"
 
 
 @verified_read
@@ -666,7 +667,7 @@ def render_aggregation(p, project, out):
         if s.get('duration') is not None and not s.get('duration_source') and p.get('config', {}).get('video_source') == 'imported':
             timing += '（来源待确认）'
         if s.get('duration', 0) and s['duration'] > 15 and p.get('config', {}).get('video_source') == 'imported':
-            reason += '；单镜超过15秒，需拆分或调整计划时长。'
+            reason = reason.rstrip('；。 ') + '；单镜超过15秒，需拆分或调整计划时长。'
         lines.append(f"| {esc(display_group)} | {esc(sid)} | {timing} | {esc(s['script'])} | {picture} | {status} | {treatment} | {esc(basis)} | {esc(reason)} |")
     # Reference omission counts are not a video-repair decision. Require a current,
     # evidence-bound decision; incomplete/stale judgments cannot create advice.
