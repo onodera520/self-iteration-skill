@@ -12,6 +12,23 @@
 
 整组定位后，一次整理补查范围：动作过程/瞬时结果、状态冲突、疑似漏镜、无法定位、边界不清。合并重叠时间段后批量局部补帧；动作检查保留连续证据，充分即停止。未发现上述疑点也仍须逐镜审查及相邻承接检查；这只是查看顺序，不是自动跳过或判 PASS。未完整回看或取得全片连续覆盖不能判 absent。改变选帧或出现新矛盾时按状态、省图依据及边界依赖增量复核，不限于左右一镜。
 
+默认先生成匹配编号与工作单，再一次登记整组：
+
+```text
+python scripts/storyboard.py prepare-map PROJECT.json EVIDENCE_DIR/evidence.json --group G01 --output MATCH_VIEW.json --worklist-output MATCH_WORKLIST.json
+python scripts/storyboard.py map PROJECT.json MATCH_WORKLIST.json --view MATCH_VIEW.json
+```
+
+prepare-map 不改项目、不作匹配判断。MATCH_VIEW.json 集中列出全部抽帧（F001 等编号）、完整脚本要求、工具计算状态、资产及来源组边界；MATCH_WORKLIST.json 为 matching-worklist-1，base_digest 绑定该视图。阅读图片后，整批填写全部镜头且保持顺序，matched 行例如：
+
+```json
+{"shot_id":"S01","status":"matched","observation":"女孩仍握着钥匙，尚未交接",
+ "candidates":[{"frame_id":"F001","observation":"女孩手中可见钥匙","visible_facts":["女孩右手握一把钥匙"]}],
+ "selection":{"frame_id":"F001","reason":"持物状态清楚"}}
+```
+
+候选只写帧号和单帧事实；选帧只写帧号和理由。工具从冻结证据恢复路径、精确时间与 SHA256，不代替模型定位或判定。uncertain/absent 不强选图；absent 仍须完整补查记录。未知/重复帧号、漏镜号、乱序、手填绑定和无效选帧均拒绝；素材、脚本、资产、边界或证据文件变化后重新 prepare-map，不能把旧编号指向新素材。map --view 仍经原映射与选帧校验，在同一锁内原子写回，失败不保存半组。旧完整 MAPPING.json＋selections 入口和增量补查方式继续兼容；编号机制不减少候选、不改 matched/uncertain/absent 的语义。
+
 ## 工作清单与协调草稿
 
 默认串行组级审查，短片和紧密连续事件优先串行。只有多个完整事件可独立核对、确有足够视觉工作量，且预计收益高于分发、草稿整理、边界复核和协调成本时，才启用最多两个任务；同批简述选择理由，不为分流另开模型调用，不按固定镜数或秒数强制并行。
@@ -24,13 +41,23 @@ python scripts/review_draft.py prepare PROJECT.json G01 REVIEW_DRAFT.json --cont
 
 prepare 保存同一有效上下文的四种表示，不另跑 context：CONTEXT.json 保留全部资产、抽帧、候选、要求、计算状态和边界；REVIEW_DRAFT.json 保存精确机械绑定；REVIEW_VIEW.json 是只读阅读视图，帧集中列一次，用 F001 等编号关联候选和选帧；WORKLIST.json 是 review-worklist-2 精简编辑清单，用 E001 等编号对应草稿证据。所有文件使用新的不同路径，不覆盖已有判断。完整 SHA256、实际时间、路径、版本和指纹留在上下文与草稿，视图不删候选或连续帧，也不代替有效证据。需要详细 evidence_refs 或发生矛盾时回查 CONTEXT.json；不凭视图摘要改绑证据。去除旧 previous_review 是已有行为，不复用旧批准。
 
-先读 REVIEW_VIEW.json，再集中填写工作单：每个镜头的 review/reference 和组级检查仍全部显式填写，保留七项逐镜 checks、verdict、identity_reason、理由、推导依据、边界及问题。已有单帧中性事实可用 `{"id":"E001","reuse_facts":true,"interpretation":"本次按要求核对后的解释"}` 复用；没有已记 observation 和非空 visible_facts 时，必须填写 id/observation/visible_facts/interpretation。编号由固定草稿生成，base_digest 绑定整份草稿；缺项、重复编号、未知编号或私加时间/哈希均拒绝。E 编号不是镜号，不允许将不同帧合为一条观察。
+小组直接读完整 REVIEW_VIEW.json。内容较多时先读索引，再按事件或镜号读取，避免整份 JSON 输出被截断后补读：
+
+```text
+python scripts/review_draft.py read PROJECT.json REVIEW_VIEW.json --index
+python scripts/review_draft.py read PROJECT.json REVIEW_VIEW.json --event E01
+python scripts/review_draft.py read PROJECT.json REVIEW_VIEW.json --shots S03 S04
+```
+
+三种选择互斥；不带选择读取完整组。索引列出全组镜号、事件及全部候选帧号，不算已经阅读画面。分段结果保留所选镜头及左右邻镜的完整要求、入口/出口状态、全部候选、选帧及其间连续抽帧和邻近帧；来源组外部边界仍完整提供。F/E 编号始终沿用完整视图，不在分段内重编号。required_checks 与 required_coverage 明列完整审查要求；unread_in_this_view 列出此次未包含的镜头、候选、帧及边界，不表示代理的阅读历史。代理合并各次读取范围，按这些清单读完剩余必要内容；非候选连续帧不能因未被选中就忽略。视图与冻结上下文均须和当前有效证据一致，变化或手改后拒绝读取，需重新 prepare。不逐镜另开 LLM 判断或 context/review；分段是同一次组级判断的阅读方式。
+
+读完后集中填写整个工作单：每个镜头的 review/reference 和组级检查仍全部显式填写，保留七项逐镜 checks、verdict、identity_reason、理由、推导依据、边界及问题。已有单帧中性事实可用 `{"id":"E001","reuse_facts":true,"interpretation":"本次按要求核对后的解释"}` 复用；没有已记 observation 和非空 visible_facts 时，必须填写 id/observation/visible_facts/interpretation。编号由固定草稿生成，base_digest 绑定整份草稿；缺项、重复编号、未知编号或私加时间/哈希均拒绝。E 编号不是镜号，不允许将不同帧合为一条观察。
 
 只有 verdict 为 FAIL/absent 的镜头需要 repair 块，字段仍是 critical/critical_kind/affects_story/script_quote/issue_ids/impact/correction/preserves_script，按 [返修依据](repair-assessments.md) 填真实值；初始 uncertain 后改为 FAIL 时补齐该块，不能只改 verdict。PASS/uncertain 不保留空返修模板。所有判定仍由审查者作出，工具只复原原绑定，不默认 PASS，不省去正常镜头的检查。缺失镜头无本镜帧，不能因编号机制伪造画面。
 
 `review_draft.py fill PROJECT.json REVIEW_DRAFT.json WORKLIST.json COMPLETED_REVIEW.json` 按原草稿恢复完整审查，写文件前执行原 check，包括当前素材哈希、指纹、全部逐镜要求、取舍和返修校验。fill 成功后一次 `previs.py review PROJECT.json COMPLETED_REVIEW.json` 登记，不重复独立 check；fill 不能代替登记。需要 identity_scope 等详细可选字段时直接编辑完整草稿再 check。CLI 默认精简清单；`--legacy-worklist` 恢复旧表单，原无附加参数的草稿入口继续兼容。不手写临时拼接脚本、不反复倾倒整个项目。
 
-匹配阶段看过的单帧，在 `candidates[]` 中同时填 `observation`（该帧摘要）和非空 `visible_facts`（中性可见事实数组）；候选 path、time、sha256 直接取 evidence.json。本帧观察要求 SHA256 与时间精确一致，变化时重新查看，不允许自动改绑。prepare 把这些事实带入 evidence，保留每帧独立记录（包括已观察但非最终选帧的候选），不把多帧动作拼成某一帧事实。旧的逐镜 observation 可能是跨帧总结，因此不会自动移入单帧证据；没有单帧记录时仍留空待填写。
+匹配阶段看过的单帧，在 `candidates[]` 中同时填 `observation`（该帧摘要）和非空 `visible_facts`（中性可见事实数组）；默认按帧号由工具复原绑定，旧完整格式仍直接取 evidence.json。本帧观察要求 SHA256 与时间精确一致，变化时重新查看，不允许自动改绑。prepare 把这些事实带入 evidence，保留每帧独立记录（包括已观察但非最终选帧的候选），不把多帧动作拼成某一帧事实。旧的逐镜 observation 可能是跨帧总结，因此不会自动移入单帧证据；没有单帧记录时仍留空待填写。
 
 复用的是事实，不是解释或批准：interpretation、identity_reason、理由、逐镜 checks/判定、省图依据和必要返修证据仍由审查者按 review.md 完成。已有事实可读而无需重写；要求或新证据引发矛盾时重新核对。matched 不自动 PASS，确认 absent 沿用映射但不伪造本镜帧；不代填 mapping_verified 或 grouping_checked。空观察、空理由及未完成的 uncertain/false 不能直接通过登记。
 
@@ -52,13 +79,13 @@ python scripts/finish_review.py PROJECT.json PROFILE.json --output DELIVERY_DIR 
 
 审查登记完成后执行。工具持有同一项目锁，顺序完成当前审查与返修字段预检 → 规划 → 返修机读判定 → 暂存交付 → 校验逐镜表、图片及依赖哈希 → 冻结交付记录。不启动模型、不提交付费任务。原来的单步命令继续兼容，但默认不再自行拼接会提前冻结的旧命令顺序。
 
-run-dir 必须是新的内部目录，与交付目录分开，保存 AGGREGATION.json、REPAIR_DECISIONS.json、恢复检查点 PENDING_DELIVERY.json 和含阶段耗时的 FINISH_REPORT.json。交付仍只有逐镜表 Markdown 与图片。已存在快照只有聚合指纹和文件哈希一致时才能复用，不能把旧快照标成新结果。实际返修视频独立审查完成后才可指定 --stage repaired。
+run-dir 必须是新的内部目录，与交付目录分开，保存 AGGREGATION.json、REPAIR_DECISIONS.json、恢复检查点 PENDING_DELIVERY.json 和含阶段耗时的 FINISH_REPORT.json。审查交付仍只有逐镜表 Markdown 与图片；触发阈值时另在独立新目录交付新视频提示词 MD，不修改冻结目录。已存在快照只有聚合指纹和文件哈希一致时才能复用，不能把旧快照标成新结果。实际返修视频独立审查完成后才可指定 --stage repaired。
 
 默认缺少返修字段时报告 preflight_blocked（退出码 2），按组/镜列出缺项，不改项目、不生成或冻结交付。补齐有依据的字段，check/review 后再收尾；只是文书缺项且证据/要求未变时复用已经核对的观察，不重看全片。
 
 | 场景 | 正确入口与处理 |
 | --- | --- |
-| 常规收尾 | 上述 finish 命令；成功后只核对逐镜表和图片一次，无新问题即停止。满足返修门槛、预检和额度时按用户持续授权自动继续一次，不另询问；当次禁止返修时停止。 |
+| 常规收尾 | 上述 finish 命令；成功后只核对逐镜表和图片一次，无新问题即停止。满足返修门槛时同批完成提示词准备、重新 decide 后 export-prompt，然后停止；不提交生成任务。 |
 | 旧项目明确只交付，暂缺返修依据 | check 和 finish 均显式加 `--delivery-only`；仍校验有效审查和证据，缺项保留 delivery_complete_decision_blocked，不能当作无需返修或允许付费。不得为了绕过缺项默认使用。 |
 | 冻结后补正了审查 | 先登记有效审查，再用新交付目录、新 run-dir 和 `--revision-reason "实际补正原因"` 收尾。工具保存旧记录到 repair_delivery_history 并关联修订，旧文件必须仍通过哈希检查；不得覆盖旧目录、删除快照或清空任务/付费额度。 |
 | 暂存交付后校验失败 | 修复原因，用新 run-dir 加 `--resume-from OLD_RUN/FINISH_REPORT.json`。项目、profile、阶段、修订原因及检查点/文件哈希全部匹配时，可沿用原 output 复用暂存文件，仍重新执行当前证据与交付校验。 |
@@ -90,4 +117,4 @@ kind 可用 reviewer_wall、tool、wait，区分审查墙钟、工具处理和�
 - **全部本地候选均不可用时才下载缺失组件。** 新下载固定落在 `%USERPROFILE%/.cache/ai-storyboard-previs/tools/`：Python 放 `python/`，FFmpeg/FFprobe 放 `ffmpeg/bin/`；非 Windows 使用用户缓存目录下同名稳定目录。缺 Python 模块只补模块，不重装已有解释器；缺 FFprobe 不代表已有 FFmpeg 失效。禁止把运行环境下载到任务目录、日期目录或每次新建的临时目录。下载来源采用官方或项目认可发行源，安装完成后执行上述检查，失败则报告具体缺项，不循环重复下载。
 - 主流程只探测/准备一次，将确认的绝对路径和版本写到稳定目录的 `runtime-paths.json` 供以后优先核验复用；该记录不是免检凭据，路径失效才重新探测。命令使用选定 Python 的绝对路径，并在当前进程设置 FFMPEG、FFPROBE、PYTHONUTF8=1；示例中的 `python` 均指这个解释器。子代理继承同一组路径，不单独安装；无需修改系统 PATH 或重复复制工具到项目。
 
-用户提供 Shot 分组时直接使用，跳过自动初分、相邻合并和短段复核；审查仍按原来源组批量处理，不增加逐镜判断。输入 Shot 数不增加一次自动返修额度，分组冲突不是返修理由。交付只保留一张逐镜表，分组编号仍展示。
+用户提供 Shot 分组时直接使用，跳过自动初分、相邻合并和短段复核；审查仍按原来源组批量处理，不增加逐镜判断。输入 Shot 数不触发或增加生成任务，分组冲突不是返修理由。交付只保留一张逐镜表，分组编号仍展示。

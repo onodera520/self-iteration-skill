@@ -161,7 +161,7 @@ def finish(project, profile, output, run_dir, stage='original', delivery_only=Fa
                 core.save(project, candidate)
             report['status'] = ('complete' if all(d['status'] == 'complete' for d in report['decisions'].values())
                                 else 'delivery_complete_decision_blocked')
-            report['next_action'] = ('Inspect the per-shot table and images once, then stop unless an authorized repair is due.'
+            report['next_action'] = ('Inspect the per-shot table and images once. For triggered sources, complete prompt preparation, rerun decide and use export-prompt; deliver text then stop. Do not submit or generate a video.'
                                      if report['status'] == 'complete' else
                                      'Legacy delivery only; repair decision blocked. Complete review then use --revision-reason with a new output directory.')
         except Exception as exc:

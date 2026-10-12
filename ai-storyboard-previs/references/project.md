@@ -30,7 +30,7 @@
 
 准备入口持有同一 `.lock`，任一步失败立即停止，成功保存的前序阶段保留。它显式拦截 missing_assets，并重新核对全部资产文件；首轮还没有抽帧时 missing_anchors 是预期情况，不当作已通过画面。EVIDENCE_DIR 和 PREPARE_INTERNAL_DIR 必须是互不嵌套的新目录。内部 PREPARE_REPORT.json 记录失败阶段和机械耗时；失败后先修正原因，再换新目录重跑，当前视频路径、版本、组指纹及哈希仍一致才复用已有登记，baseline 不可改写。此入口不执行匹配、审查、生成或付费，也不改变脚本和采样策略。
 
-`repair_asset_style` 是返修专用的资产风格数据，所有默认校对项目都可延后准备，基础模板不伪造 SHA256。完整脚本、shot_design 和原文基线仍在准备阶段整理并冻结；普通审查使用资产描述及真实帧事实。触发返修且持续授权适用、额度允许时，利用原图或有效中性观察一次补齐风格数据，重新运行 decide 绑定当前风格后才生成 prompt；不得改写冻结基线。一旦填写仍检查格式，提交前仍核对完整资产覆盖及当前哈希。精确片段如下（sha256 必须替换为工具实测值）：
+`repair_asset_style` 是返修专用的资产风格数据，所有默认校对项目都可延后准备，基础模板不伪造 SHA256。完整脚本、shot_design 和原文基线仍在准备阶段整理并冻结；普通审查使用资产描述及真实帧事实。达到返修阈值、准备输出新提示词时，利用原图或有效中性观察一次补齐风格数据，重新运行 decide 绑定当前风格后才 export-prompt；不得改写冻结基线。一旦填写仍检查格式，导出前仍核对完整资产覆盖及当前哈希。精确片段如下（sha256 必须替换为工具实测值）：
 
 ```json
 {
@@ -60,7 +60,7 @@
 - facts/state_changes/intent/omission_assessment：按 [事实规则](facts-and-planner.md)。requirements 按 [镜头要求](shot-requirements.md)，代理仅写入口种子和变化，工具计算完整状态。每镜 requirements 要求块一条 provenance，其他来源分级不变。
 - reference：保留兼容 mode: anchor|ai_fill、path、role、reason、locked。它不是新的审查结论；最终读取独立 aggregation。
 - groups：id/shot_ids/reason/version；一份输入视频对应一个来源组，列应覆盖的连续镜头。所有来源组顺序拼接必须恰好覆盖脚本一次。不得为降低漏镜占比修改应覆盖范围。
-- config：workflow: video_evidence、video_source: imported、video_input_mode: assets、delivery_mode: storyboard_images、aspect_ratio。固定工作流的新返修请求以当前来源视频的实际显示画幅覆盖本次请求参数，不回写此配置；宽高、像素比例、旋转与来源 SHA256 由工具探测并存入请求的 input_aspect，不由代理手填。missing_policy 可省略，默认 min_count: 2、min_ratio: 0.2；两者同时达到才建议重新生成。保留 max_repair_rounds/max_submissions/budget_cny 等安全字段。新项目默认 max_submissions=1，使用用户预先授予的一次自动返修权限，不预设无法换算的 budget_cny；当次要求只审查则设 max_submissions=0。自动返修仍需达到独立阈值并通过预检；既有项目的预算、零额度及次数限制保持，不清空已有预算。可选 fixed_workflow_limits.max_duration_seconds 存已确认的工作流时长上限。
+- config：workflow: video_evidence、video_source: imported、video_input_mode: assets、delivery_mode: storyboard_images、aspect_ratio。固定工作流的新返修请求以当前来源视频的实际显示画幅覆盖本次请求参数，不回写此配置；宽高、像素比例、旋转与来源 SHA256 由工具探测并存入请求的 input_aspect，不由代理手填。missing_policy 可省略，默认 min_count: 2、min_ratio: 0.2；两者用于必要漏图的内部诊断，不作为最终视频返修门槛；最终采用独立的关键问题、严重画面损坏及普通剧情问题阈值。保留 max_repair_rounds/max_submissions/budget_cny 等安全字段。新项目模板保留 max_submissions=1，作为旧付费入口的上限，不代表自动授权。默认只导出新视频提示词，不占提交额度，不受零额度或预算阻挡；不修改这些字段。既有项目的预算、零额度及次数限制继续约束实际生成，不清空已有预算。可选 fixed_workflow_limits.max_duration_seconds 存已确认的工作流时长上限。
 - imported_videos：import-video 登记 target_id/version/source: user_video/outputs/output_hashes/group_fingerprint/duration。duration 为原视频实测范围，只用于抽帧及证据定位。独立于付费 tasks，替换视频后旧证据失效。
 - board_mappings：全组 matched/uncertain/absent，候选路径、实际时间、SHA256、observation。绑定视频、来源组及 evidence.json 哈希；完整补查确认 absent 时另填 full_rescan: true、rescan.ranges 和 rescan.observation，范围须覆盖整份实测视频。缺失镜头 candidates 为空，不能伪造对应帧。
 - map 输入可带 selections 数组，批量原子登记映射及选帧，不增加 LLM 判断。对疑似把前镜延续当独立镜头的行，明确 independent_visual_unit: false；该行不得 matched，先补查。实际不同事件可在同一连续长镜中成立，需各自可见证据，不以时间递增冒充独立镜头。
@@ -71,14 +71,18 @@
 - shot_reviews：每镜 verdict: PASS|FAIL|uncertain|absent、reason、evidence_times；已定位镜须含七项 checks。一镜 FAIL 不妨碍其他镜独立 PASS；受影响的连续性边界仍须核对。漏镜不可 PASS。
 - reference_assessments：每镜 decision: anchor|ai_fill|pending、reason、evidence_times、derivable: true|false|null、basis_shot_ids。decision 是参考图取舍候选，独立于 mapping.status 与 shot_reviews.verdict；组合须遵守 [审查决策表](review.md#可推导省图判据与决策表)。ai_fill 须列按镜序前后夹住本镜的两个合格依据镜，优先选最近且足以支持剧情判断的 PASS＋anchor 锚点；最近是建议而非工具硬约束，选较远依据须说明原因。依据必须独立 PASS、保留图且有有效资产支持；reason 须说明省去独立图后故事仍可读且无歧义，不要求唯一复原手势或微表情；关键剧情节点保护，纯表演细节不自动保护。漏镜不填本镜帧证据，改引用完整补查和依据镜。没有可靠结论填 null，不计必要漏镜；已明确必须保留则填 false 并说明依据。连续缺失的镜头不能互为依据，应向外寻找合格双侧锚点；仍缺一侧且判断不足填 null，已知必须保留填 false。最终规划仍检查候选的必要锚点约束。所有省图均为建议/未验证。context.reference_policy_version 纳入指纹，旧结论需按当前判据复核。
 - tasks/repairs/repair_round：保留旧生成与新增固定工作流返修记录，不清空历史绕过安全限制。user_video_prompt 为旧生成模式字段，默认不需要。
-- source_video_prompts：可选的原视频生成提示词，按来源组编号保存 text、text_sha256、video_sha256，由 repair_reference.py 登记。repair_prompt_references：实际返修时一次填写的同源、同脚本筛选依据；普通审查无需填写。不把两字段放入 group，不作为成片证据，也不改变视觉审查和聚合指纹。原文及筛选只进入返修请求快照；格式见 [原视频提示词参考](auto-repair.md#原视频提示词参考)。
-- repair_baseline / repair_decisions / repair_deliveries：冻结脚本原文、独立机读判定、原视频与一次返修各自不可覆盖的交付快照。repair_assessments 在原有组级审查内记录，repair policy=2 与脚本/资产/视频/审查/聚合指纹绑定，详见 [自动返修](auto-repair.md)。video_format_requirements 可选，须为 source_script 中全局格式要求的逐字摘录。
+- source_video_prompts：可选的原视频生成提示词，按来源组编号保存 text、text_sha256、video_sha256，由 repair_reference.py 登记。repair_prompt_references：达阈值准备新提示词时一次填写的同源、同脚本筛选依据；普通审查无需填写。不把两字段放入 group，不作为成片证据，也不改变视觉审查和聚合指纹。原文及筛选只进入返修请求快照；格式见 [原视频提示词参考](auto-repair.md#原视频提示词参考)。
+- repair_baseline / repair_decisions / repair_deliveries：冻结脚本原文、独立机读判定、原视频与历史实际返修各自不可覆盖的交付快照。repair_assessments 在原有组级审查内记录，repair policy=3 与脚本/资产/视频/审查/聚合指纹绑定，详见 [提示词与历史任务](auto-repair.md)。旧判定须重算，不自动升级；有效审查和聚合可复用，已提交任务仍严格恢复原请求。video_format_requirements 可选，须为 source_script 中全局格式要求的逐字摘录。
 
-- shots[].shot_design：一次整理从脚本摘取的镜头设计，与原文一并冻结；缺省只用已有景别或标未指定，不新增机位。repair_asset_style：实际返修前按原资产顺序保存 asset_id、sha256、visible_style_facts、guidance 和 preserves_story，重新绑定返修判定；普通审查不提前要求此专用表单。详见 [受控提示词](auto-repair.md#受控提示词)。返修每镜固定 1.0s、总长为来源镜数 ×1 秒，含漏镜和 ai_fill；不覆盖原脚本 duration 或改变逐镜表计划时长。内部请求 prompt_version=4；blocks.text 保留冻结原文，generation_text 为来源绑定的纯视觉视图，不写回脚本。原提示词经同镜脚本核对的补充保存在 blocks.input_prompt_guidance。prompt_fingerprint 绑定版本、提示词与逐镜块；生成时长标签为【生成时长】，原头部计划时长不嵌套进正文。旧请求恢复和文件保留见自动返修。末尾固定预演段与资产风格均不可由临时请求覆盖。
+- repair_prompt_exports：按来源组保存用户提示词文件路径/哈希、内部请求快照路径/哈希、请求和判定指纹及 binding。文本导出记录独立于 tasks，不占提交额度，不改执行状态；过期记录只留历史，不能支持新请求。
+
+- shots[].shot_design：一次整理从脚本摘取的镜头设计，与原文一并冻结；缺省只用已有景别或标未指定，不新增机位。repair_asset_style：达阈值导出提示词前按原资产顺序保存 asset_id、sha256、visible_style_facts、guidance 和 preserves_story，重新绑定返修判定；普通审查不提前要求此专用表单。详见 [受控提示词](auto-repair.md#受控提示词)。返修每镜固定 1.0s、总长为来源镜数 ×1 秒，含漏镜和 ai_fill；不覆盖原脚本 duration 或改变逐镜表计划时长。内部请求 prompt_version=5；blocks.text 保留冻结原文，generation_text 为来源绑定的纯视觉视图，不写回脚本。原提示词经同镜脚本核对的补充保存在 blocks.input_prompt_guidance，已转换的公共格式要求保存在 format_requirements。prompt_fingerprint 绑定版本、内部提示词与逐镜块，完整请求另有指纹；内部时长标签为【生成时长】，交付模板为【时长】1s，原头部计划时长不嵌套进正文。交付将修正、关键变化及目标静帧说明融入镜头内容，只保留必须／不得出现标签；内部绑定和逐镜字段不删。旧请求恢复和文件保留见提示词与历史任务规则。固定预演段与真实资产风格均不可由临时请求覆盖。
 
 ## 精简审查文件
 
-review_draft.py prepare 一次输出完整 CONTEXT.json、REVIEW_DRAFT.json、只读 REVIEW_VIEW.json 和精简 WORKLIST.json。精简视图仍覆盖全部候选、连续帧、要求、资产、完整计算状态及左右边界；F 编号集中索引帧，E 编号索引草稿证据，详细 SHA256 保留在完整文件。工作单 format: review-worklist-2 与 base_digest 绑定固定草稿，只填明确判断及事实增量；FAIL/absent 的返修依据不能省。fill 由原草稿恢复完整绑定，走原完整校验，仍须 review 登记。编号或省略空模板不改变 review_schema/reference_policy_version，旧完整工作单兼容。详细约定见 [执行提效](efficiency.md#工作清单与协调草稿)。
+storyboard.py prepare-map 在匹配前输出 matching-view-1 视图与 matching-worklist-1 工作单：完整要求、计算状态、资产、边界和全部抽帧集中列出，帧用 F 编号关联。工作单的 base_digest 绑定当前视图，按原序填写全部镜头的 status/observation、candidates（frame_id/observation/visible_facts）及 selection（frame_id/reason 或 null），不手填路径、时间、SHA256。map --view 恢复精确绑定后原子登记映射与选帧；证据或输入变化拒绝旧编号。工具不作视觉判断；旧完整映射与补查入口兼容。
+
+review_draft.py prepare 一次输出完整 CONTEXT.json、REVIEW_DRAFT.json、只读 REVIEW_VIEW.json 和精简 WORKLIST.json。精简视图仍覆盖全部候选、连续帧、要求、资产、完整计算状态及左右边界；F 编号集中索引帧，E 编号索引草稿证据，详细 SHA256 保留在完整文件。read --index/--event/--shots 可先读索引再按事件或镜号读取，保留范围内全部候选、计算状态、邻镜和外部边界，明确列出未读内容及整组检查要求；不自动认定内容已读或允许部分审查。读取入口验证冻结上下文和当前证据一致，不改项目。工作单 format: review-worklist-2 与 base_digest 绑定固定草稿，只填明确判断及事实增量；FAIL/absent 的返修依据不能省。fill 由原草稿恢复完整绑定，走原完整校验，仍须 review 登记。匹配 F 编号和审查 F/E 编号各绑定各自视图，不能跨视图混用；编号或省略空模板不改变 review_schema/reference_policy_version，旧完整工作单兼容。详细约定见 [执行提效](efficiency.md#工作清单与协调草稿)。
 
 ## 资产审查证据版本
 
@@ -96,7 +100,7 @@ groups 使用 A01 等编号、shot_ids、reason、source_group_ids；新版 impo
 
 状态含义：anchor_reviewed 为检验通过保留图；ai_fill_suggested_unverified 为该镜通过且建议省图；absent_fill_suggested_unverified 为确认漏镜但可推导，未验证；mismatch 为该镜需重新生成；missing_required 为必要漏镜；pending 为证据或推导不足。mode 分别为 anchor/ai_fill/pending，不等于视频是否通过。
 
-missing_summary 按来源视频记录 bad_num/total/ratio/regenerate，仅内部保存。bad_num 只计 missing_required，每原镜号一次；已定位的画面错误、可推导漏镜、待检查不计。默认 2/10 触发，2/11 与 1/3 不触发。
+missing_summary 按来源视频记录 bad_num/total/ratio/regenerate，仅作为参考图必要缺失的内部诊断保留。bad_num 只计 missing_required，每原镜号一次；已定位的画面错误、可推导漏镜、推导未知不计必要漏图。此处 regenerate 不再决定视频返修或表后建议。repair_decisions 独立统计影响剧情的已确认 FAIL/absent；关键剧情问题或严重损坏 1 镜触发，普通问题至少 2 镜且占全部应覆盖脚本镜头 ≥20% 触发。确认影响剧情的漏镜即计入，与参考图能否省去无关。
 
 evidence_fingerprint 绑定脚本（含 beat、event、duration、duration_source、narrative_plan）、input_shot_groups 及聚合规则版本、资产、源视频、匹配、帧哈希、选帧、组级审查及漏镜策略。输入分组进入审查上下文与聚合指纹，但不进入视频来源组指纹；修改输入分组会使审查、聚合及交付结论失效，有效视频、抽帧、映射和中性观察仍可复用。上述时长、来源、剧情依据同时进入来源组指纹与审查上下文；增加或修改后重新绑定输入并审查，旧结论不可复用为通过。grouping policy=4；新版审查上下文包含4秒下限与同 Beat 范围，旧审查需重新核对分组依据，不自动升级为通过；有效帧与观察仍可复用。缺失镜头的结论绑定完整补查和依据图片，不创造缺失图的哈希。来源变化后旧审查和聚合失效，不能通过改状态字符串恢复通过。
 
@@ -115,8 +119,8 @@ MD 固定只包含一张逐镜表，不另列分组顺序、总时长或理由�
 
 问题或修改建议优先一句短说明：错误镜写“具体差异；如何修正”，证据不足写“看不清什么；补查什么”，省图或保留镜写简短承接/保留理由。例如“钥匙持有者错误；改为女孩持钥匙”或“交接结果看不清；补看动作结束帧”。填写现有 shot_reviews.reason/followup、issues.problem/fix、reference_assessments.reason 时即使用简洁表达，不增加逐镜总结调用。渲染优先展示问题及处理，不叠加通用规划解释、完整时间范围或重复的“建议省图，未验证”；证据与详细判定保留内部。多个独立问题各一短句，保留锚点拒绝依据，不按字数硬截断，脚本原文不改写。
 
-达到阈值时只在逐镜表下加一句“建议重新生成视频 ××，原因是必要漏镜达到阈值”。**不输出视频结论表，不展示内部 bad_num 或占比表**。未达到时，只在逐镜表列具体建议。
+达到阈值时只在逐镜表下加一句“建议重新生成视频 ××，原因是……”，原因按当前独立判定填写关键剧情问题、严重画面损坏或普通剧情问题达到阈值。**不输出视频结论表，不展示内部 bad_num 或占比表**。没有有效独立判定时不借用必要漏图计数给整段返修建议；未达到时，只在逐镜表列具体建议。
 
 尚无有效聚合时优先按输入 Shot 分组展示，没有输入时按来源组展示，检验结果写“—”，问题栏说明缺少当前有效审查。失效历史帧可展示但必须标“历史抽帧 · 证据不足”，不能支持当前省图；确认漏镜不以历史帧充当当前镜头。交付目录有额外文件则换新目录，工具不删除旧成果。
 
-不交付视频、HTML、项目 JSON、规划日志或内部审查记录。默认使用 repair_cycle.py original/repaired 包装原有渲染，分别保存 01_原视频审查.md 与 02_返修视频审查.md；首份不可覆盖。仅在新视频已生成并独立审查、相关边界有效后输出第二份。返修未触发或无法执行只交付首份并说明状态；返修后仍有错误则如实标记。独立付费阈值不改变逐镜表或原有必要漏镜统计。
+不交付视频、HTML、项目 JSON、规划日志或内部审查记录。默认 finish_review.py 保存 01_原视频审查.md 与图片；达到阈值并完成准备后，另用 repair_cycle.py export-prompt 交付新视频提示词 MD，含原资产顺序、生成时长及画幅，放独立新目录并停止。未触发只交付审查，准备受阻说明缺项。不调用生成 API，也不自动生成第二轮审查。用户交回新视频后独立审查、使用新交付目录，旧快照不覆盖。历史 repaired 入口仅用于真实安装并独立审查的返修视频。阈值不改变逐镜表或必要漏镜统计。

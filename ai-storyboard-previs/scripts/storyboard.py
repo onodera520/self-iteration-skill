@@ -157,6 +157,113 @@ def record_mapping(p, project, data):
     p.setdefault("board_mappings", []).append(item)
 
 
+@verified_read
+def matching_view(p, project, gid, evidence_file):
+    """Number current extraction evidence before the agent makes any matches."""
+    from previs import video_context
+    require(p.get('config', {}).get('video_source') == 'imported', 'imported video required for matching view')
+    ctx = video_context(p, project, gid)
+    evidence_path = resolve(project, evidence_file)
+    evidence = read(evidence_path)
+    require(evidence.get('video_sha256') == ctx['video_sha256'], 'evidence video mismatch')
+    require(number(evidence.get('duration')) and abs(evidence['duration'] - ctx['duration']) < .001,
+            'extraction must cover the measured source video')
+    frames = evidence.get('frames')
+    require(isinstance(frames, list) and frames, 'extraction frames required')
+    seen_paths, seen_bindings = set(), set()
+    for frame in frames:
+        path = image_path(project, frame['path'])
+        require(frame.get('sha256') == sha(path), 'changed extraction frame; prepare current evidence')
+        require(number(frame.get('time')) and 0 <= frame['time'] <= evidence['duration'], 'invalid frame timestamp')
+        binding = (frame['sha256'], frame['time'])
+        require(str(path) not in seen_paths and binding not in seen_bindings, 'duplicate extraction frame binding')
+        seen_paths.add(str(path)); seen_bindings.add(binding)
+    result = {k: copy.deepcopy(v) for k, v in ctx.items()
+              if k not in ('mapping', 'extraction', 'previous_review', 'context_fingerprint')}
+    for row in result['shots']:
+        row.pop('selected_frame', None)  # Matching/selection is this operation's output.
+    result.update(format='matching-view-1', project_file=str(Path(project).resolve()),
+                  evidence_file=str(evidence_path), evidence_sha256=sha(evidence_path))
+    result['extraction'] = {k: copy.deepcopy(v) for k, v in evidence.items() if k != 'frames'}
+    result['frames'] = [dict(id=f'F{i:03d}', **copy.deepcopy({k: v for k, v in f.items() if k != 'sha256'}))
+                        for i, f in enumerate(frames, 1)]
+    return result
+
+
+def matching_worklist(view):
+    """No automatic matched/absent decision, no manual paths, hashes or timestamps."""
+    return dict(format='matching-worklist-1', base_digest=digest(view),
+                shots=[dict(shot_id=s['shot_id'], status=None, observation='', candidates=[], selection=None)
+                       for s in view['shots']])
+
+
+def prepare_mapping(p, project, gid, evidence_file, output, worklist_output):
+    output, worklist_output = Path(output).resolve(), Path(worklist_output).resolve()
+    require(output != worklist_output and not output.exists() and not worklist_output.exists(),
+            'use distinct new matching view/worklist files')
+    require(output not in (Path(project).resolve(), resolve(project, evidence_file)) and
+            worklist_output not in (Path(project).resolve(), resolve(project, evidence_file)),
+            'matching outputs cannot overwrite source files')
+    view = matching_view(p, project, gid, evidence_file)
+    save(output, view)
+    save(worklist_output, matching_worklist(view))
+    return view
+
+
+def expand_matching(p, project, view, edits):
+    """Restore exact evidence bindings; original mapping/selection gates still apply."""
+    require(view.get('format') == 'matching-view-1' and view.get('project_file') == str(Path(project).resolve()),
+            'use a matching view from this project')
+    require(view == matching_view(p, project, view['group_id'], view['evidence_file']),
+            'stale matching IDs; prepare against current evidence')
+    require(set(edits) == {'format', 'base_digest', 'shots'} and edits['format'] == 'matching-worklist-1'
+            and edits['base_digest'] == digest(view), 'stale or invalid matching worklist')
+    rows = edits['shots']
+    require(isinstance(rows, list) and all(isinstance(r, dict) for r in rows) and
+            [r.get('shot_id') for r in rows] == [s['shot_id'] for s in view['shots']],
+            'matching worklist must cover every shot once in order')
+    evidence = read(view['evidence_file'])
+    frames = {f'F{i:03d}': f for i, f in enumerate(evidence['frames'], 1)}
+    result = dict(group_id=view['group_id'], video_sha256=view['video_sha256'],
+                  evidence_file=view['evidence_file'], shots=[], selections=[])
+    for row in rows:
+        require({'shot_id', 'status', 'observation', 'candidates', 'selection'} <= set(row) <=
+                {'shot_id', 'status', 'observation', 'candidates', 'selection',
+                 'independent_visual_unit', 'full_rescan', 'rescan'}, 'unexpected matching fields')
+        require(isinstance(row['candidates'], list), 'matching candidates must be a list')
+        expanded = {k: copy.deepcopy(v) for k, v in row.items() if k not in ('candidates', 'selection')}
+        expanded['candidates'] = []
+        used = set()
+        for candidate in row['candidates']:
+            require(isinstance(candidate, dict) and set(candidate) == {'frame_id', 'observation', 'visible_facts'},
+                    'candidate needs frame_id and single-frame facts; do not handwrite bindings')
+            fid = candidate['frame_id']
+            require(fid in frames and fid not in used, 'unknown or duplicate matching frame ID')
+            used.add(fid)
+            restored = {k: copy.deepcopy(frames[fid][k]) for k in ('path', 'sha256', 'time')}
+            restored.update(observation=candidate['observation'], visible_facts=copy.deepcopy(candidate['visible_facts']))
+            has_frame_observation(restored)
+            expanded['candidates'].append(restored)
+        result['shots'].append(expanded)
+        selection = row['selection']
+        if selection is not None:
+            require(isinstance(selection, dict) and set(selection) == {'frame_id', 'reason'} and
+                    selection['frame_id'] in used and row['status'] == 'matched',
+                    'select only a matched candidate ID with a reason')
+            frame = frames[selection['frame_id']]
+            result['selections'].append(dict(shot_id=row['shot_id'], path=frame['path'],
+                                             source=dict(kind='frame', time=frame['time']), reason=selection['reason']))
+    return result
+
+
+def record_matching_worklist(p, project, view, edits):
+    # Keep revalidation and the original atomic write staging in one evidence scope.
+    staged = copy.deepcopy(p)
+    with evidence_operation():
+        record_mapping_batch(staged, project, expand_matching(staged, project, view, edits))
+    p.clear(); p.update(staged)
+
+
 def record_mapping_batch(p, project, data):
     """Register one mapping and its selections atomically, without new judgments."""
     staged = copy.deepcopy(p)
@@ -447,6 +554,9 @@ def delivery_note(decision, review, sid, issues):
 def render_aggregation(p, project, out):
     from planner import current_aggregation
     proposal = current_aggregation(p, project)
+    from repair_cycle import current_decision
+    repair_decisions = [current_decision(p, project, g['id']) for g in p['groups']
+                        if g['id'] in p.get('repair_decisions', {})]
     from grouping import has_input_groups, parse_input_groups
     groups = proposal["groups"] if proposal else (parse_input_groups(p['input_shot_groups'], [s['id'] for s in p['shots']])
                                                 if has_input_groups(p) else p["groups"])
@@ -558,12 +668,17 @@ def render_aggregation(p, project, out):
         if s.get('duration', 0) and s['duration'] > 15 and p.get('config', {}).get('video_source') == 'imported':
             reason += '；单镜超过15秒，需拆分或调整计划时长。'
         lines.append(f"| {esc(display_group)} | {esc(sid)} | {timing} | {esc(s['script'])} | {picture} | {status} | {treatment} | {esc(basis)} | {esc(reason)} |")
-    for summary in (proposal or {}).get("missing_summary", []):
-        if summary["regenerate"]:
-            source_group = group(p, summary["source_group_id"])
+    # Reference omission counts are not a video-repair decision. Require a current,
+    # evidence-bound decision; incomplete/stale judgments cannot create advice.
+    for repair_decision in repair_decisions:
+        source_group = next(g for g in p['groups'] if g['id'] == repair_decision['binding']['source_group_id'])
+        if repair_decision['triggered']:
             _, video = current_video(p, project, source_group)
             name = f"{source_group['id']}（{video.name}）" if video else source_group["id"]
-            lines += ["", f"建议重新生成视频 {esc(name)}，原因是必要漏镜达到阈值。"]
+            reasons = {'critical': '已确认关键剧情错误或关键节点缺失',
+                       'severe_visual_damage': '严重画面损坏遮挡必要内容',
+                       'cumulative': '影响剧情的错误或漏镜达到阈值'}
+            lines += ["", f"建议重新生成视频 {esc(name)}，原因是{reasons[repair_decision['trigger']]}。"]
     lines += ["", "重新生成仅为建议，本流程不调用 API；证据不足时先补查。", ""]
     path = out / "分镜说明.md"
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -572,14 +687,31 @@ def render_aggregation(p, project, out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("command", choices=("map", "select", "restore", "omit", "review", "repair", "context", "render"))
+    ap.add_argument("command", choices=("prepare-map", "map", "select", "restore", "omit", "review", "repair", "context", "render"))
     ap.add_argument("project")
     ap.add_argument("input", help="JSON path, shot ID for context, or directory for render")
+    ap.add_argument('--group', help='source group for prepare-map')
+    ap.add_argument('--output', help='new matching view for prepare-map')
+    ap.add_argument('--worklist-output', help='new semantic matching worklist for prepare-map')
+    ap.add_argument('--view', help='frozen matching view for compact map input')
     args = ap.parse_args()
+    if args.command == 'prepare-map':
+        require(args.group and args.output and args.worklist_output and not args.view,
+                'prepare-map needs --group, --output and --worklist-output')
+    else:
+        require(not (args.group or args.output or args.worklist_output) and (not args.view or args.command == 'map'),
+                'matching view arguments apply only to prepare-map/map')
     with locked(args.project):
         p = read(args.project)
         validate(p, args.project)
-        if args.command == "render":
+        if args.command == 'prepare-map':
+            prepare_mapping(p, args.project, args.group, args.input, args.output, args.worklist_output)
+            print('Matching scaffold only; inspect frames and fill observations and decisions.')
+        elif args.command == 'map' and args.view:
+            record_matching_worklist(p, args.project, read(args.view), read(args.input))
+            save(args.project, p)
+            print('Saved internal storyboard state.')
+        elif args.command == "render":
             print(render(p, args.project, args.input))
         elif args.command == "context":
             from requirements import contexts
@@ -597,6 +729,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, KeyError, OSError, StopIteration) as exc:
+    except (ValueError, KeyError, OSError, StopIteration, TypeError, AttributeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)

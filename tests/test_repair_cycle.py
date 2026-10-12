@@ -92,10 +92,10 @@ class RepairCycleTests(fixtures.Base):
 
     def test_threshold_critical_cumulative_exact_and_deduplication(self):
         cases = [
-            (3,['a'],['a'],[],False), (3,['a','b'],['a'],[],False),
-            (14,['a','b'],['a','b'],[],False),
-            (15,['a','b','c'],[],[],True), (16,['a','b','c'],['a'],[],False),
-            (10,['a','a','b'],[],[],False), (10,['a','b','c','c'],[],[],True),
+            (3,['a'],['a'],[],True), (3,['a','b'],['a'],[],True),
+            (14,['a','b'],['a','b'],[],True),
+            (15,['a','b','c'],[],[],True), (16,['a','b','c'],[],[],False),
+            (10,['a','a','b'],[],[],True), (10,['a','b','c','c'],[],[],True),
             (100,['a'],['a'],['a'],True), (10,['a','b'],[],['a'],True),
             (11,['a','b'],[],['a'],False), (3,['a'],[],['a'],False),
             (100,['a','b'],['b'],['a'],True)]
@@ -106,12 +106,12 @@ class RepairCycleTests(fixtures.Base):
                 self.assertEqual(d['error_count'],len(set(ids)))
                 self.assertEqual(d['necessary_missing_shot_ids'],missing)
         with self.assertRaises(ValueError):
-            repair.threshold(3,['a'],[],['b'])
+            repair.threshold(3,['a'],['b'])
 
     def test_no_missing_failures_keep_verdict_and_block_paid_submission(self):
-        for verdicts in ({'S02':'FAIL'}, {'S01':'FAIL','S02':'FAIL'}):
+        for verdicts in ({'S02':'FAIL'},):
             with self.subTest(verdicts=verdicts):
-                d = self.ready(verdicts, critical=True)
+                d = self.ready(verdicts, critical=False)
                 self.assertFalse(d['triggered'])
                 self.assertEqual(d['necessary_missing_shot_ids'],[])
                 self.assertEqual(d['review_verdict'],'FAIL')
@@ -131,20 +131,20 @@ class RepairCycleTests(fixtures.Base):
         self.assertEqual(d['necessary_missing_shot_ids'],[])
 
     def test_policy_change_invalidates_old_decision_without_new_review(self):
-        with patch.object(repair,'POLICY',1):
+        with patch.object(repair,'POLICY',2):
             self.ready({'S02':'FAIL'})
         with self.assertRaisesRegex(ValueError,'stale'):
             repair.current_decision(self.p,self.path,'G01')
         d = repair.decide(self.p,self.path,'G01')
-        self.assertEqual(d['binding']['policy'],2)
-        self.assertFalse(d['triggered'])
+        self.assertEqual(d['binding']['policy'],3)
+        self.assertTrue(d['triggered'])
 
-    def test_real_decision_excludes_derivable_missing_and_preserves_bad_num(self):
+    def test_real_decision_counts_derivable_story_absence_and_preserves_bad_num(self):
         self.ready({'S02':'absent'}, {'S02':'absent'}, critical=False, derivable=True)
         d = self.p['repair_decisions']['G01']
         self.assertFalse(d['triggered'])
-        self.assertEqual(d['problem_shot_ids'],[])
-        self.assertEqual(d['allowed_correction_shot_ids'],[])
+        self.assertEqual(d['problem_shot_ids'],['S02'])
+        self.assertEqual(d['allowed_correction_shot_ids'],['S02'])
         self.assertEqual(self.p['aggregation']['missing_summary'][0]['bad_num'],0)
         self.assertEqual(core.review_current(self.p,self.path,'G01')['verdict'],'FAIL')
 
@@ -381,6 +381,7 @@ class RepairCycleTests(fixtures.Base):
         # Replace output with independent simulated video/evidence; formerly passed S01 now fails.
         self.mapping(revision=2)
         self.finish(self.assessment(self.review_data({'S01':'FAIL'},middle_derivable=False),True))
+        repair.decide(self.p,self.path,'G01')
         second=repair.snapshot(self.p,self.path,self.path.parent/'new','repaired')
         text=Path(second).read_text(encoding='utf-8')
         self.assertIn('该镜需重新生成',next(l for l in text.splitlines() if '| S01 |' in l))
@@ -422,6 +423,7 @@ class RepairCycleTests(fixtures.Base):
         historical.update(id='historical', installed_version=1, output_hashes=['obsolete-output'])
         self.p['tasks']['historical'] = historical  # Old task occurs after latest: order must not select it.
         self.p['repair_round'] = 2
+        repair.decide(self.p, self.path, 'G01')
         report = repair.snapshot(self.p, self.path, self.path.parent / 'round2', 'repaired2')
         self.assertEqual(Path(report).name, '03_返修视频审查（第二轮）.md')
         self.assertEqual(sum(l.startswith('| --- |') for l in Path(report).read_text(encoding='utf-8').splitlines()), 1)
@@ -653,7 +655,7 @@ class RepairCycleTests(fixtures.Base):
     def test_legacy_formats_recover_and_install_without_new_submission(self):
         self.ready()
         original = copy.deepcopy(self.p)
-        for version in (None, 0, 2, 3, repair_prompt.VERSION):
+        for version in (None, 0, 2, 3, 4, repair_prompt.VERSION):
             with self.subTest(version=version):
                 self.p = copy.deepcopy(original)
                 request = repair._compose_prompt(self.p, self.path, 'G01', version)

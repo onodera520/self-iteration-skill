@@ -90,7 +90,7 @@ narrative_plan 使用一条块级来源，boundaries 按原镜序覆盖每个相
 
 结果保存为独立 aggregation，不覆盖来源 groups、版本、抽帧时间和任务。省图结论绑定当前脚本（含 duration、duration_source、beat、event、narrative_plan）及 input_shot_groups、规则版本、资产、视频、匹配、完整补查、依据图和审查指纹；缺失镜头不伪造对应帧证据。来源变化后相关结论失效。
 
-每份来源视频分别统计 missing_required。默认 bad_num >= 2 且必要漏镜 / 应覆盖镜头数 >= 20% 才建议重新生成该视频。已定位的画面错误、可推导漏镜及待检查不计数。比例按原视频应覆盖的镜数计算，不按最终聚合组计算，也不因省图减少分母。结果仅存内部 missing_summary；交付不增加视频结论表。
+每份来源视频分别统计 missing_required，bad_num 仍仅计必要漏图，已定位错误、可推导漏镜及 uncertain 不计入该统计。missing_summary 的 total/ratio/regenerate 是兼容保留的参考图诊断，不决定最终视频返修建议。最终建议读取独立 repair_decisions：有证据的关键剧情问题或严重损坏 1 镜触发，普通影响剧情的错误及确认漏镜至少 2 镜且占比 ≥20%；影响剧情的可推导漏镜也计入返修。分母始终为来源视频全部应覆盖脚本镜头，不因省图缩小；详见 [返修证据](repair-assessments.md)。交付不增加视频结论表。
 
 输出聚合与省图建议，不保证未来 AI 一定复现该画面。所有 ai_fill 标建议/未验证，不启动专项生成验证。展示规则见 [项目约定](project.md)。
 

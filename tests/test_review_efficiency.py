@@ -79,8 +79,8 @@ class FinishTests(fixtures.Base):
         expected = copy.deepcopy(self.p)
         plan = planner.post_review_plan(expected, self.path, {})
         planner.store_aggregation(expected, self.path, plan)
-        expected_path = repair.snapshot(expected, self.path, self.path.parent / 'manual', 'original')
         decision = repair.decide(expected, self.path, 'G01')
+        expected_path = repair.snapshot(expected, self.path, self.path.parent / 'manual', 'original')
         with patch.object(repair, 'submit', side_effect=AssertionError('No paid submission')):
             result = finish_review.finish(self.path, {}, self.output, self.run_dir)
         actual = core.read(self.path)

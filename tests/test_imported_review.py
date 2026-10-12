@@ -387,14 +387,13 @@ class ImportedReviewTests(fixtures.Base):
             r=self.review_data(gid=gid,middle_derivable=False)
             self.assertEqual(core.record_review(self.p,self.path,r),'PASS')
 
-    def test_threshold_note_below_exactly_one_table(self):
+    def test_reference_missing_counts_alone_do_not_add_video_repair_note(self):
         self.mapping({'S01':'absent','S03':'absent'})
         result=self.finish(self.review_data(middle_derivable=False))
         self.assertTrue(result['missing_summary'][0]['regenerate'])
         text=Path(boards.render(self.p,self.path,self.path.parent/'delivery')).read_text(encoding='utf8')
         self.assertEqual(sum(line.startswith('| --- |') for line in text.splitlines()),1)
-        self.assertEqual(text.count('建议重新生成视频'),1)
-        self.assertGreater(text.index('建议重新生成视频'),text.rfind('| S03 |'))
+        self.assertEqual(text.count('建议重新生成视频'),0)
         self.assertNotIn('bad_num',text)
 
     def test_reselecting_existing_candidate_invalidates_adjacent_reviews(self):

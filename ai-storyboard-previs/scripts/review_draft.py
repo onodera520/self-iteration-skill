@@ -184,6 +184,80 @@ def agent_view(ctx, context_file):
     return result
 
 
+def read_view(project, view_file, shot_ids=None, event_id=None, index_only=False):
+    """Read a complete slice of one current frozen view, never a partial review."""
+    from storyboard import CHECKS
+    with evidence_operation():
+        p = core.read(project)
+        core.validate(p, project)
+        view = core.read(view_file)
+        core.require(view.get('format') == 'review-view-1', 'prepare a current review view first')
+        context_file = view['full_context_file']
+        frozen = core.read(context_file)
+        live = core.video_context(p, project, view['group_id'])
+        live.pop('previous_review', None)
+        core.require(frozen == live and view == agent_view(live, context_file),
+                     'stale or changed reading view; prepare against current evidence')
+        core.require(sum((shot_ids is not None, event_id is not None, index_only)) <= 1,
+                     'choose shots, event, or index')
+        ids = [s['shot_id'] for s in view['shots']]
+        mapping = {r['shot_id']: r for r in view['mapping']['shots']}
+        index = [dict(shot_id=s['shot_id'], event_id=(s.get('event') or {}).get('id'),
+                      event_summary=(s.get('event') or {}).get('summary'),
+                      candidate_frame_ids=[c['frame_id'] for c in mapping[s['shot_id']]['candidates']])
+                 for s in view['shots']]
+        if event_id is not None:
+            shot_ids = [r['shot_id'] for r in index if r['event_id'] == event_id]
+            core.require(shot_ids, 'unknown event in this source group: ' + event_id)
+        if index_only:
+            primary = []
+        elif shot_ids is None:
+            primary = ids
+        else:
+            core.require(isinstance(shot_ids, list) and shot_ids and len(set(shot_ids)) == len(shot_ids)
+                         and set(shot_ids) <= set(ids), 'choose unique current group shot IDs')
+            primary = [sid for sid in ids if sid in shot_ids]
+        included = set(primary)
+        for sid in primary:
+            n = ids.index(sid)
+            included.update(ids[max(0, n-1):n+2])
+        frame_ids = {c['frame_id'] for sid in included for c in mapping[sid]['candidates']}
+        for s in view['shots']:
+            if s['shot_id'] in included and s['selected_frame']:
+                frame_ids.add(s['selected_frame']['frame_id'])
+        # Include all continuous frames between candidates, plus the immediately
+        # adjacent extracted frames. Remaining evidence is explicitly indexed below.
+        frames = view['frames']
+        chronological = sorted(frames, key=lambda f: f['time'])
+        positions = [i for i, f in enumerate(chronological) if f['id'] in frame_ids]
+        if positions:
+            frame_ids.update(f['id'] for f in chronological[max(0, min(positions)-1):max(positions)+2])
+        if primary == ids:
+            frame_ids.update(f['id'] for f in frames)
+        result = {k: copy.deepcopy(v) for k, v in view.items()
+                  if k not in ('shots', 'frames', 'mapping', 'evidence_ids', 'view_digest', 'boundaries')}
+        result.update(format='review-read-1', source_view_digest=view['view_digest'], index=index,
+                      primary_shot_ids=primary,
+                      adjacent_shot_ids=[sid for sid in ids if sid in included and sid not in primary],
+                      required_checks=dict(shot=sorted(CHECKS), group=view['review_scope']['group_checks']),
+                      required_coverage=ids,
+                      remaining_primary_shot_ids=[sid for sid in ids if sid not in primary])
+        result['shots'] = [copy.deepcopy(s) for s in view['shots'] if s['shot_id'] in included]
+        result['mapping'] = copy.deepcopy(view['mapping'])
+        result['mapping']['shots'] = [copy.deepcopy(mapping[sid]) for sid in ids if sid in included]
+        result['frames'] = [copy.deepcopy(f) for f in frames if f['id'] in frame_ids]
+        result['evidence_ids'] = [copy.deepcopy(e) for e in view['evidence_ids'] if e['shot_id'] in included]
+        result['boundaries'] = [] if index_only else copy.deepcopy(view['boundaries'])
+        result['unread_in_this_view'] = dict(
+            shot_ids=[sid for sid in ids if sid not in included],
+            candidates=[copy.deepcopy(r) for r in index if r['shot_id'] not in included],
+            frame_ids=[f['id'] for f in frames if f['id'] not in frame_ids],
+            boundary_shot_ids=[b['shot_id'] for b in view['boundaries']] if index_only else [])
+        result['scope_note'] = ('Reading scope only; unread lists describe this response, not reading history. '
+                                'Read remaining scopes/evidence as needed; submit one complete group review.')
+    return result
+
+
 def fill(draft, edits):
     """Merge an explicit worklist, never rebind timestamps, hashes, or context."""
     core.require(edits.get('base_digest') == core.digest(draft), 'stale worklist; use the exact source draft')
@@ -329,6 +403,12 @@ def main():
     sub.add_argument('--worklist-output', help='save editable semantic fields keyed by shot ID')
     sub.add_argument('--view-output', help='save normalized agent reading view; requires --context-output')
     sub.add_argument('--legacy-worklist', action='store_true', help='write the previous full semantic form instead of evidence deltas')
+    sub = commands.add_parser('read', help='read complete shot/event scopes from a current frozen view')
+    sub.add_argument('project'); sub.add_argument('view')
+    scope = sub.add_mutually_exclusive_group()
+    scope.add_argument('--shots', nargs='+')
+    scope.add_argument('--event')
+    scope.add_argument('--index', action='store_true')
     sub = commands.add_parser('check')
     sub.add_argument('project'); sub.add_argument('review')
     sub.add_argument('--delivery-only', action='store_true', help='legacy review only; not repair readiness')
@@ -340,6 +420,8 @@ def main():
         prepare(args.project, args.group, args.output, args.context_output, args.worklist_output,
                 args.view_output, compact=not args.legacy_worklist)
         print('draft only; verify frame notes and complete interpretations and judgments')
+    elif args.command == 'read':
+        print(json.dumps(read_view(args.project, args.view, args.shots, args.event, args.index), ensure_ascii=False))
     elif args.command == 'fill':
         core.require(not Path(args.output).exists(), 'use a new completed draft file')
         completed = fill(core.read(args.draft), core.read(args.worklist))

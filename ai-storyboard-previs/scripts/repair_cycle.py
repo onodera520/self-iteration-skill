@@ -1,4 +1,4 @@
-"""Evidence-bound, one-submission repair cycle. No visual judgments or implicit submission."""
+"""Evidence-bound repair prompts; legacy paid execution requires explicit authorization."""
 from __future__ import annotations
 import argparse
 import copy
@@ -14,7 +14,7 @@ import repair_reference
 
 _CURRENT_REFERENCE = object()
 
-POLICY = 2
+POLICY = 3
 WORKFLOW = "2099403222661287938"
 PREVIS_DIRECTIVE = '严格按照分镜脚本生成一段快速切镜的视频，每个分镜不需要很大的动作幅度。没有台词，没有音乐，不要出现字幕。每个分镜硬切转场。'
 DECISION_STATE = ('fingerprint', 'execution_status', 'task_key', 'automatic_allowance_used')
@@ -57,6 +57,7 @@ def validate_assessments(p, r):
                  'repair_assessments must cover each confirmed FAIL/absent once')
     shots = {s['id']: s for s in p['shots']}
     issues = {i['id']: i for i in r['issues']}
+    from repair_readiness import diagnose_damage
     for a in rows:
         sid = a['shot_id']
         core.require(type(a.get('critical')) is bool and type(a.get('affects_story')) is bool,
@@ -79,21 +80,26 @@ def validate_assessments(p, r):
         if problems[sid]['verdict'] == 'FAIL':
             core.require(any(e['shot_id'] == sid and e['time'] in problems[sid]['evidence_times']
                              for e in r['evidence']), 'Repair FAIL needs same-shot timed evidence')
+        diagnose_damage(a, r, path='repair_assessments[' + sid + ']').finish()
 
 
-def threshold(total, eligible, critical, necessary_missing=()):
+def threshold(total, eligible, critical, necessary_missing=(), severe_visual_damage=()):
     ids = list(dict.fromkeys(eligible))
     keys = list(dict.fromkeys(critical))
     missing = list(dict.fromkeys(necessary_missing))
-    core.require(total > 0 and len(ids) <= total and set(keys) <= set(ids) and
-                 set(missing) <= set(ids), 'Invalid repair counts')
+    damaged = list(dict.fromkeys(severe_visual_damage))
+    core.require(type(total) is int and total > 0 and len(ids) <= total and len(missing) <= total and
+                 set(keys) <= set(ids) and set(damaged) <= set(ids), 'Invalid repair counts')
     ratio = Decimal(len(ids)) / Decimal(total)
-    critical_trigger = bool(missing) and bool(keys)
-    cumulative = len(ids) >= (2 if missing else 3) and ratio >= Decimal('0.2')
-    return dict(triggered=critical_trigger or cumulative,
+    critical_trigger = bool(keys)
+    damage_trigger = bool(damaged)
+    cumulative = len(ids) >= 2 and ratio >= Decimal('0.2')
+    return dict(triggered=critical_trigger or damage_trigger or cumulative,
                 error_count=len(ids), total=total, ratio=float(ratio), critical_shot_ids=keys,
+                severe_visual_damage_shot_ids=damaged,
                 necessary_missing_shot_ids=missing, problem_shot_ids=ids,
-                trigger='critical' if critical_trigger else ('cumulative' if cumulative else 'below_threshold'))
+                trigger=('critical' if critical_trigger else 'severe_visual_damage' if damage_trigger
+                         else 'cumulative' if cumulative else 'below_threshold'))
 
 
 def binding(p, project, gid):
@@ -118,20 +124,28 @@ def decide(p, project, gid):
     validate_assessments(p, r)
     rows = {x['shot_id']: x for x in planner.current_aggregation(p, project)['decisions']}
     assessments = {a['shot_id']: a for a in r.get('repair_assessments', [])}
-    eligible, critical, allowed, missing = [], [], [], []
+    eligible, critical, allowed, missing, absent, damaged = [], [], [], [], [], []
     for v in r['shot_reviews']:
         sid, verdict = v['shot_id'], v['verdict']
         necessary_absent = verdict == 'absent' and rows[sid]['status'] == 'missing_required'
         if necessary_absent:
             missing.append(sid)
-        if verdict == 'FAIL' or necessary_absent:
-            allowed.append(sid)
+        if verdict in ('FAIL', 'absent'):
             a = assessments[sid]
-            if necessary_absent or a['affects_story']:
+            if verdict == 'FAIL' or a['affects_story'] or necessary_absent:
+                allowed.append(sid)
+                if verdict == 'absent':
+                    absent.append(sid)
+            # Reference-image necessity cannot excuse a confirmed missing story event.
+            if a['affects_story']:
                 eligible.append(sid)
                 if a['critical']:
                     critical.append(sid)
-    result = dict(binding=bound, **threshold(len(r['shot_reviews']), eligible, critical, missing),
+                if 'severe_visual_damage' in a:
+                    damaged.append(sid)
+    total = len(core.shots(p, core.group(p, gid)))
+    result = dict(binding=bound, **threshold(total, eligible, critical, missing, damaged),
+                  confirmed_missing_shot_ids=absent,
                   allowed_correction_shot_ids=allowed, assessments=list(assessments.values()),
                   review_verdict=r['verdict'], execution_status='not_started', task_key=None)
     # A repaired video never obtains another automatic allowance, even after new reviews.
@@ -174,9 +188,10 @@ def asset_style(p, assets):
     return profile
 
 
-def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snapshot=_CURRENT_REFERENCE):
+def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snapshot=_CURRENT_REFERENCE,
+                    stored_decision=None):
     # Historical config-based requests reconstruct exactly for recovery/installation only.
-    d = current_decision(p, project, gid)
+    d = current_decision(p, project, gid) if stored_decision is None else stored_decision
     core.require(d['triggered'], 'Repair threshold not reached')
     from requirements import contexts
     resolved = contexts(p)
@@ -184,10 +199,10 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
     assessment = {s['shot_id']: s for s in d['assessments']}
     ss = core.shots(p, core.group(p, gid))
     views = repair_prompt.input_views(ss, original, resolved,
-        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version in (2, 3, repair_prompt.VERSION) else {}
-    visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {})) if version in (3, repair_prompt.VERSION) else None
+        {s['id']: i for i, s in enumerate(p['shots'], 1)}) if version in (2, 3, 4, repair_prompt.VERSION) else {}
+    visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {})) if version in (3, 4, repair_prompt.VERSION) else None
     reference, guidance = None, {}
-    if version == repair_prompt.VERSION:
+    if version in (4, repair_prompt.VERSION):
         reference = repair_reference.current(p, gid) if reference_snapshot is _CURRENT_REFERENCE else reference_snapshot
         guidance = repair_reference.validate(reference, d['binding'], original, [s['id'] for s in ss])
     def render_text(path, text):
@@ -204,7 +219,8 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
         lines.insert(0, repair_prompt.SILENT_DIRECTIVE)
     if reference is not None:
         lines.append('原提示词参考仅补充与本镜脚本相容的视觉细节；剧情、行动主体、镜序和结果以本镜正文及约束为准，生成时长、画幅与固定预演要求以本次请求为准。')
-    lines.extend(render_text(f'format.{i}', text) for i, text in enumerate(baseline(p)['format_requirements']))
+    format_requirements = [render_text(f'format.{i}', text) for i, text in enumerate(baseline(p)['format_requirements'])]
+    lines.extend(format_requirements)
     if shape:
         lines.append(f'本次返修以输入视频画幅 {aspect} 为准；原文或固定工作流中不一致的画幅不用于本次。仅调整本次请求，不裁切输入视频。')
     lines += ['镜号对应：' + '；'.join(f"镜头{i}={s['id']}" for i, s in enumerate(ss, 1)),
@@ -276,8 +292,10 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
                   + '、'.join(f"镜头{i}={sid}" for i, sid in corrections)]
         if views:
             missing = set(d['necessary_missing_shot_ids'])
+            confirmed_missing = set(d.get('confirmed_missing_shot_ids', missing))
             for label, ids in [('【必要漏镜补齐】', [(i, sid) for i, sid in corrections if sid in missing]),
-                               ('【已定位画面修正】', [(i, sid) for i, sid in corrections if sid not in missing])]:
+                               ('【已确认漏镜补齐】', [(i, sid) for i, sid in corrections if sid in confirmed_missing - missing]),
+                               ('【已定位画面修正】', [(i, sid) for i, sid in corrections if sid not in confirmed_missing])]:
                 if ids:
                     lines.append(label + '、'.join(f'镜头{i}={sid}' for i, sid in ids))
     lines += ['【原始资产风格】', '以下风格仅约束视觉表现，不改变原脚本人物关系、动作、场景与时空；资产展示背景不替代剧情背景。']
@@ -295,7 +313,9 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
         result['input_aspect'] = shape
     if reference is not None:
         result['source_prompt_reference'] = copy.deepcopy(reference)
-    if version in (2, 3, repair_prompt.VERSION):
+    if version == repair_prompt.VERSION:
+        result['format_requirements'] = format_requirements
+    if version in (2, 3, 4, repair_prompt.VERSION):
         result['prompt_version'] = version
         if visual:
             result['visual_adaptations'] = visual.used
@@ -313,11 +333,24 @@ def validate_stored_request(p, project, task):
     request = task['request']
     core.require(task['fingerprint'] == core.digest(request), 'Invalid stored repair request')
     gid = task['repair_source_group']
+    # A threshold-policy upgrade must not orphan an already submitted request.
+    # Reconstruct its exact frozen decision only if every evidence/input binding
+    # still matches; this exception is not used by make_prompt/prepare/new exports.
+    d = p.get('repair_decisions', {}).get(gid)
+    expected_binding = binding(p, project, gid)
+    stored_policy = d.get('binding', {}).get('policy') if d else None
+    core.require(stored_policy in (1, 2, POLICY), 'Unsupported stored repair policy')
+    expected_binding['policy'] = stored_policy
+    core.require(d['binding'] == request.get('binding') == expected_binding,
+                 'Inputs changed since submission; do not attach stale repair')
+    core.require(d['fingerprint'] == request.get('decision_fingerprint') ==
+                 core.digest({k: v for k, v in d.items() if k not in DECISION_STATE}),
+                 'Stored repair decision was modified')
     if 'prompt_version' in request:
         version = request['prompt_version']
-        core.require(version in (2, 3, repair_prompt.VERSION), 'Unsupported repair prompt version')
+        core.require(version in (2, 3, 4, repair_prompt.VERSION), 'Unsupported repair prompt version')
         expected = _compose_prompt(p, project, gid, version, input_aspect='input_aspect' in request,
-                                   reference_snapshot=request.get('source_prompt_reference'))
+                                   reference_snapshot=request.get('source_prompt_reference'), stored_decision=d)
         request_limits(p, expected)
         core.require(request == expected, 'Inputs changed since submission; do not attach stale repair')
     else:
@@ -326,7 +359,7 @@ def validate_stored_request(p, project, task):
         matched = False
         for version in (None, 0):
             try:
-                matched = request == _compose_prompt(p, project, gid, version)
+                matched = request == _compose_prompt(p, project, gid, version, stored_decision=d)
             except ValueError:
                 continue
             if matched:
@@ -531,12 +564,12 @@ def install(p, project, key):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('command', choices=('baseline', 'decide', 'prompt', 'submit', 'resume', 'attach', 'install') + DELIVERY_STAGES)
+    ap.add_argument('command', choices=('baseline', 'decide', 'prompt', 'export-prompt', 'submit', 'resume', 'attach', 'install') + DELIVERY_STAGES)
     ap.add_argument('project', type=Path)
     ap.add_argument('target', nargs='?')
     ap.add_argument('--output', type=Path)
     ap.add_argument('--task-id')
-    ap.add_argument('--submit', action='store_true', help='Execute paid submission under standing or task authorization; omit for preview, never use in implementation tests')
+    ap.add_argument('--submit', action='store_true', help='Legacy paid execution only when explicitly requested in this task; default workflow exports text and stops')
     args = ap.parse_args()
     project = args.project.resolve()
     with core.locked(project):
@@ -548,6 +581,10 @@ def main():
             result = decide(p, project, args.target)
         elif cmd == 'prompt':
             result = prepare(p, project, args.target)
+        elif cmd == 'export-prompt':
+            from repair_export import export_prompt
+            core.require(args.output, '--output Markdown file required')
+            result = export_prompt(p, project, args.target, args.output)
         elif cmd in DELIVERY_STAGES:
             core.require(args.output, '--output delivery directory required')
             result = snapshot(p, project, args.output, cmd)
@@ -568,6 +605,8 @@ def main():
             else:
                 core.save(output, result)
             print(str(output.resolve()))
+        elif cmd == 'export-prompt':
+            print(result['path'])
         else:
             print(result if isinstance(result, str) else 'Saved')
 
