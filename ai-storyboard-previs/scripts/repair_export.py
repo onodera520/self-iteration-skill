@@ -1,4 +1,4 @@
-"""Export an evidence-bound repair prompt, without preparing or submitting a paid task."""
+"""Export a source-bound, audited prompt for the user to generate a new video."""
 from pathlib import Path
 import previs as core
 import repair_prompt
@@ -15,7 +15,7 @@ def _sentences(parts):
 def render_prompt(p, request):
     """Render the user's plain prompt layout from a validated internal request.
 
-    Version 6 uses a source-bound, audited body. Older versions retain their
+    Version 6 uses a source-bound, audited body. The source view retains its
     stored contributions and target phase, without extra scope commentary.
     """
     assets = {a['id']: a for a in (request['asset_descriptions'] if request.get('prompt_version') == 6 else p['assets'])}
@@ -52,7 +52,8 @@ def render_prompt(p, request):
              '小幅运动仍须清楚呈现原脚本的关键动作和结果，全部镜头按上述顺序各自独立硬切，不得遗漏、合并或重排',
              repair_prompt.SILENT_DIRECTIVE]
     fixed.extend(request.get('format_requirements', []))
-    fixed.append(f'画幅以输入视频的 {request["aspect_ratio"]} 为准')
+    origin = '分镜图的共同画幅' if request['input_aspect']['selection'] == 'common_images' else '已确定的目标画幅'
+    fixed.append(f'采用{origin} {request["aspect_ratio"]}')
     lines += ['', _sentences(fixed)]
     style = []
     for i, row in enumerate(request['asset_style']['assets'], 1):

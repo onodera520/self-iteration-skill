@@ -77,5 +77,5 @@ def style_shape(p, report):
         report.check(text(row.get('sha256')), path + '.sha256', 'current asset SHA256 required')
         facts = row.get('visible_style_facts')
         report.check(text_array(facts) and bool(facts), path + '.visible_style_facts',
-                     'Visible asset style facts required as nonempty text array; do not infer style from the failed video')
+                     'Visible asset style facts required as nonempty text array; do not infer style from the failed reference image')
         report.check(text(row.get('guidance')), path + '.guidance', 'Grounded asset style guidance required')

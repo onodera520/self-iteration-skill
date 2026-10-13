@@ -1,72 +1,64 @@
 ---
 name: ai-storyboard-previs
-description: 根据用户的视频、脚本、资产图及可选 Shot 分组，抽帧匹配、回看补查并校对内容与连续性，在指定或自动分组内判断保留图、可推导省图和必要漏镜，交付图片和一张逐镜 Markdown 表。用于已有视频的分镜校对、聚合规划与参考图取舍；达到返修阈值时输出新视频提示词，供用户自行生成。
+description: 校对用户按顺序与脚本配对好的分镜参考图，核对人物、场景、道具、构图、可见状态及连续性，保留原有分组与省图判断，交付一张逐镜 Markdown 表和全部原图；达到阈值时输出整批新视频提示词供用户自行生成。无需视频、登记、抽帧或匹配。
 ---
 
-# 抽帧校对与分镜聚合
+# 分镜图校对与规划
 
-输入为视频、完整分镜脚本和资产图，可选提供 Shot 分组和原视频提示词。先做抽帧匹配、剧情校对、补查，在指定或自动分组内判断参考图取舍，交付图片及一张逐镜 Markdown 表。达到现有返修阈值时，完成受控提示词准备，另交付新视频提示词，然后停止。提示词只按“资产对应 → 逐镜脚本 → 固定预演要求 → 资产风格”排列，保留每镜必须／不得出现；不加标题、参数表、资产路径、代码块或内部返修说明。默认不调用生成 API，不上传资产、不提交或查询生成任务、不下载或复审返修视频；原先的一次自动付费授权不再适用于此默认流程。用户自行生成后交回新视频，再独立审查。
+默认输入是用户已经按顺序与脚本配对的分镜图、完整脚本及角色／场景／道具原资产。可选 Shot 分组及原生成提示词继续保留。顺序和对应关系直接采用，不重新匹配。JSON、文件指纹和工作单由代理维护，用户不用登记。
 
-用户 Shot 分组接受表格、文字（如 `A01：S01–S03；A02：S04–S06`）或 JSON，存为独立 `input_shot_groups`，不替换视频来源组或审查批次。有输入就固定采用，跳过自动初分、相邻合并和短段复核，不要求这些步骤专用的 event/narrative_plan。用 grouping.py 一次收集覆盖、顺序、相邻性、4–15秒、12镜、Beat 和跨视频证据边界冲突；仅提示，不静默改组或退回自动分组。画面审查继续，受冲突影响的省图暂不批准；冲突不能成为画面 FAIL、必要漏镜或返修理由。无输入时沿用自动分组。具体字段与导入命令见 [分组约定](references/planning.md#用户输入-shot-分组)。
-
-可选输入该视频原始生成提示词（粘贴文本或 UTF-8 TXT/MD）。视频登记后用 repair_reference.py 原样保存并绑定来源视频；不要求用户补交，不将提示词当作成片证据或新增审查要求。准备新提示词时，在同一批次对照原提示词、完整脚本和已确认问题，选择相容且有用的视觉细节、排除冲突及重复内容。脚本决定剧情，现有生成规则决定无声、无字幕、镜序、时长和本次画幅；不直接拼接两份长文本。详见 [原视频提示词参考](references/auto-repair.md#原视频提示词参考)。
-
-新视频提示词的画幅以该次来源视频的实际显示比例为准，不修改项目默认画幅。旧固定工作流的请求级覆盖及恢复规则仍保留，但不在默认流程执行。具体支持范围见提示词规则。
-
-返修提示词使用独立的纯视觉视图：原脚本保留对白与 OS/VO，发送给模型的文本只表达已有动作、表情和剧情关系，不含台词原句、说话表演、声音或字幕指令。含此类内容的字段在返修准备中一次转换并绑定来源；无法保留关键剧情时停止。规则与字段见 [受控提示词](references/auto-repair.md#受控提示词)。
-
-首次交付前核对完整来源，按需要编排正文：原表达已清楚且涵盖来源时直接保留，不为达成“全部重写”换同义句；PASS/uncertain 也须消除实际歧义，不能只看 FAIL。工具保留未改正文，代理只填改动及必要处理说明，同批完成剧情、道具、阶段、空间、可见性、资产、时长与冲突九项检查。冻结原文及原有修正权限不变，不把个案内容或想象错误写成普遍禁令。见 [通用提示词编排](references/prompt-quality.md)。
+流程：**整批准备 → 校对图片与脚本 → 原有分组和省图判断 → 冻结审查报告 → 达阈值后导出整批新视频提示词**。图片入口不依赖 FFmpeg，不调用视频登记、抽帧、匹配或密集补查。用户自行生成；默认到提示词交付停止。
 
 ## 按阶段读取
 
-先读当前阶段需要的文件，已读且未变的规则直接复用，回查时只定位必要段落；不提前展开所有链接、历史记录或返修资料。FAIL/absent 所需的返修证据字段仍须当批填写，但未触发阈值不通读 auto-repair.md、不准备返修提示词。
+只读当前阶段必要规则；已读且未变的内容直接复用，不提前展开无关阶段资料。
 
-| 阶段 | 必读资源 | 按需补充 |
+| 阶段 | 必读 | 按需补充 |
 | --- | --- | --- |
-| 整理与准备 | [项目约定](references/project.md)、[镜头要求](references/shot-requirements.md)、[已有视频模板](assets/imported-project.json) | 首次探测环境读 [执行提效](references/efficiency.md#环境探测与复用)；事实定义不清读 [事实规则](references/facts-and-planner.md) |
-| 匹配与审查 | [审查规则](references/review.md)、[精简工作单](references/efficiency.md#工作清单与协调草稿) | FAIL/absent 读 [返修证据字段](references/repair-assessments.md)；确有并行收益且允许子任务时读 [条件并行](references/parallel-review.md) |
-| 聚合与交付 | [规划规则](references/planning.md)、项目约定的交付部分、执行提效的收尾部分 | 失败时只读对应恢复说明 |
-| 阈值触发后提示词交付 | [首次交付前编排](references/prompt-quality.md)、[提示词与历史任务](references/auto-repair.md)的“受控提示词（含资产风格）”“默认导出与交付” | 有旧提示词才读对应参考节；仅用户要求执行／恢复才读历史付费节。纯文本导出不需要 RunningHub 技能、密钥或付费额度 |
+| 整批准备 | [图片接口与快速入口](references/storyboard-images.md)、[镜头要求](references/shot-requirements.md)、[精简输入模板](assets/storyboard-input.json) | 已有图片项目或字段报错才查 [完整项目模板](assets/storyboard-project.json)、[项目字段](references/project.md)；有分组时查 [用户 Shot 分组](references/planning.md#用户输入-shot-分组) |
+| 图片校对 | 图片接口的审查约定、[精简图片审查规则](references/storyboard-review.md) | 有明确错误读 [返修证据](references/repair-assessments.md)；细节不清时放大原图 |
+| 分组和交付 | [规划规则](references/planning.md)、图片接口的交付与失效约定 | [执行提效](references/efficiency.md) |
+| 阈值触发后 | [提示词编排](references/prompt-quality.md)、[提示词规则](references/auto-repair.md) | 有原提示词才读其筛选字段 |
 
 ## 默认执行顺序
 
-1. **探测一次、整批整理。** 固定路径找到可用 Python/FFmpeg/FFprobe 就复用，缺组件才安装到稳定缓存目录。先一次路径 preflight，再一次 LLM 处理完整脚本，填写所有镜头的 facts/state_changes/requirements/块级来源及 duration/duration_source。有 Shot 分组就同批导入并集中报告冲突；无输入分组才填写 event 和 narrative_plan。输入明确提供 Beat 划分时，同批填写每镜 beat；未提供则全脚本视为一个 Beat，不把 event 自动变成 Beat。只写入口状态种子及变化，由 requirements.py 计算完整入口、出口状态。保留 source_script 和每镜 script 原文、镜号、顺序及画幅；同批摘取 shot_design，不新增脚本未给的剧情、机位或硬条件。缺计划时长提出建议并标来源。返修资产风格默认延后准备，原文基线仍立即冻结。
-2. **一次准备、全组匹配。** 使用 prepare_imported.py run 串行完成校验、视频登记、基线冻结与稀疏抽帧，不先重复独立 validate。来源组列明视频应覆盖的连续镜头，不等于最终聚合组。prepare-map 生成当前证据的帧编号视图和匹配工作单；一次批量填写镜号、帧号、匹配状态、单帧 observation/visible_facts 及选帧理由。map --view 恢复真实路径、实际时间和 SHA256，在原校验及同一锁内登记映射和选帧；证据变化后拒绝旧编号。不逐镜 map/select/context，也不由工具判断画面。
-3. **集中补证。** 看完首轮稀疏表后，一次列齐已知的 uncertain、瞬时动作、关键结果、状态冲突和边界疑点，合并范围，用同一次 extract 的多个 --dense-range 局部加密或集中回看。已知瞬时动作直接用适合的步长，争取稀疏＋集中补证两轮完成；新疑点继续补证，不设两轮硬上限、不减少必要连续帧。稀疏抽帧不能证明漏镜；absent 必须有完整视频回看或连续全片覆盖记录。找到镜头后替换错误选帧；证据仍不足则内部保留 uncertain，交付写具体缺口。事实按精确哈希复用，解释冲突时重新核对。仅细节不清才用 crop.py 生成内部局部放大图，原帧绑定不变。
-4. **一次组级审查。** prepare 同时保存完整上下文、只读精简视图、机械草稿和精简工作单。小组读完整视图；大组用 read --index 后按事件或镜号分段读取，保留所选镜头全部候选、要求、完整计算状态、邻镜及边界，明确列出本次未读内容。读取范围不缩小审查范围，全部必要证据读完后仍一次填写完整组；详细绑定按需回查完整上下文。工作单逐镜明确填写检查、判定、identity_reason、取舍和推导理由，逐帧补解释；已有中性事实可显式复用。FAIL/absent 必须补完整返修依据，其他镜头不带空返修表。fill 已包含原完整校验，成功后一次 review 登记；不额外重复 check，不逐镜审查，也不由空字段自动推定 PASS。
-5. **一次收尾。** finish_review.py 串行完成预检、规划、机读返修判定、渲染、交付校验及冻结。有输入分组时固定采用，只在无冲突组内批准省图；否则工具依次完成剧情自然初分、相邻合并、短段复核。最终组内再选参考图。成功后核对逐镜表和图片一次，有新问题才重做。达到阈值的来源，在同一准备批次补齐资产风格、纯视觉转换及可选原提示词筛选，重新 decide；repair_quality.py prepare 生成去重阅读视图与精简草稿。代理同批核对全镜、只填必要改动及处理说明、完成九项检查，finish 在同一锁内一次校验、登记并导出 Markdown，然后停止。不重复通读 source、手写最终 Markdown、逐项复制引文或新增逐镜调用；具体来源有疑问才按路径回查完整快照。提示词另放新目录，不修改冻结交付。未触发不强制输出新提示词；硬冲突或准备受阻说明缺项，不伪造提示词。冻结后补正使用新目录及关联修订，保留原交付；失败依恢复报告继续。
+1. **一次整理整批输入。** 原脚本采用“镜头N／【时长】【镜头设计】【镜头内容】”时，先用固定 extract 入口生成精简 INPUT 草稿，不临时编写解析器、不按非空行数拆镜。程序原样切取逐镜原文，兼容时长后的逗号、句号、空白及多行；同批补齐原资产、分组和逐镜必要判断。其他脚本格式按精简模板保留原文，不猜测格式或重写标点。要求只写必要状态、参考阶段、关键约束及来源，不逐项扩写脚本。purpose 与 required_result 相同时只写后者；固定字段、空数组和图片对应由程序补齐。只填状态种子和真实变化，完整入口／出口状态由 requirements.py 计算。用户给了 Shot 分组就采用，冲突集中提示、不擅自改组；未提供才准备 event/narrative_plan 并自动分组。用户未提供 Beat 时全脚本按一个 Beat 处理。普通景别、视线、姿势不自动升级成硬条件。
+2. **一次准备。** 运行 prepare_storyboards.py prepare，并用 --output 指定计划交付目录，提前检查内部项目／工作目录与交付隔离；集中检查原文、必要字段、阶段枚举，再检查图片可读性、数量、镜号和顺序，记录原图与 SHA256，冻结脚本基线，并输出上下文和精简工作单。支持用户已排好的路径列表或镜号／路径对应项。错误是输入问题，提示修正，不记为剧情错误或计入阈值。提取或准备失败即停止依赖其输出的后续步骤；不得凭文件名重排或重新猜测对应关系。
+3. **一次整批校对。** 对照原资产和每镜原图，一次记录 visible_facts，显式填写七项逐镜检查、阶段、结论、分组检查及取舍。通过镜头不写问题或修改建议，reason 由程序填“符合脚本”；程序复用可见观察补齐内部身份及阶段说明，观察须足以支撑这两项判断，确有必要时另填针对性说明。FAIL／uncertain 写具体原因、修正或需核查信息；省图仍写双侧依据和推导理由。检查人物、场景、道具、构图、关键状态和可见连续性，区分完整动作与参考阶段：动作前图不强求完成结果，单图不能证明运动也不自动判错。允许不影响剧情的合理差异，必要解释只留内部观察或资产对照。工具不替代理看图，不由空字段推定 PASS。
+4. **一次收尾。** complete 在同一锁和证据校验周期内展开工作单、登记审查、规划、判断阈值、渲染、自动校验并冻结。有用户分组时固定采用；无输入才自动初分、相邻合并和短段复核。自动校验九列内容与当前脚本、审查及取舍一致，核验逐镜原图、缩略图、链接、哈希和顺序。成功直接交付，不再人工逐镜重看；校验失败或刚修改渲染／规则时才定位检查。所有原图均展示并保存，省图只减少建议使用的生成参考图，脚本镜头始终保留。
+5. **仅达阈值时编排提示词。** complete 在准备齐全时输出 PROMPT.view.json 与精简 PROMPT.json；否则 FINISH_REPORT 列出缺项。将资产风格、必要纯视觉转换、可选旧提示词筛选在同一批次补齐，重新 decide，再 prepare 提示词计划。阅读完整来源视图，同批核对全部镜头、只改有必要的正文并完成九项检查；repair_quality.py finish 校验后导出到独立目录。共同画幅直接沿用；混用画幅先完成审查，再确定目标画幅，不能自动裁图。清楚的原表达直接保留，不强制重写。
 
 ```text
-python scripts/prepare_imported.py preflight --script SCRIPT.txt --video INPUT.mp4 --asset A.png
+# 标注式原脚本：代理将用户已排好的对应写入 IMAGES.json，用固定入口提取：
+python scripts/prepare_storyboards.py extract SCRIPT.txt --images IMAGES.json --output INPUT.json
+# 同批补齐 INPUT 的原资产、分组和逐镜必要判断后，创建新项目及工作单：
+python scripts/prepare_storyboards.py prepare PROJECT.json --input INPUT.json --run-dir PREPARE_INTERNAL --output DELIVERY
+# 已有图片项目入口（二选一，不重复准备）：
+# 仅在用户分组尚未保存时先导入：
 python scripts/grouping.py PROJECT.json SHOT_GROUPS.md --apply
-python scripts/prepare_imported.py run PROJECT.json G01 INPUT.mp4 EVIDENCE_DIR --run-dir PREPARE_INTERNAL_DIR
-python scripts/storyboard.py prepare-map PROJECT.json EVIDENCE_DIR/evidence.json --group G01 --output MATCH_VIEW.json --worklist-output MATCH_WORKLIST.json
-# 阅读 MATCH_VIEW.json，整批填写 MATCH_WORKLIST.json 后：
-python scripts/storyboard.py map PROJECT.json MATCH_WORKLIST.json --view MATCH_VIEW.json
-python scripts/review_draft.py prepare PROJECT.json G01 REVIEW_DRAFT.json --context-output CONTEXT.json --view-output REVIEW_VIEW.json --worklist-output WORKLIST.json
-# 仅大视图需要分段；小组直接读取 REVIEW_VIEW.json：
-python scripts/review_draft.py read PROJECT.json REVIEW_VIEW.json --index
-python scripts/review_draft.py read PROJECT.json REVIEW_VIEW.json --event E01
-# 无事件字段或需指定范围时改用 --shots S01 S02；继续读完其余必要内容后填写整个 WORKLIST.json。
-python scripts/review_draft.py fill PROJECT.json REVIEW_DRAFT.json WORKLIST.json COMPLETED_REVIEW.json
-python scripts/previs.py review PROJECT.json COMPLETED_REVIEW.json
-python scripts/finish_review.py PROJECT.json PROFILE.json --output DELIVERY_DIR --run-dir FINISH_INTERNAL_DIR
-# 仅达到阈值且完成提示词准备后：
+python scripts/prepare_storyboards.py prepare PROJECT.json --images IMAGES.json --run-dir PREPARE_INTERNAL --output DELIVERY
+# 阅读 CONTEXT.json 和原图，整批填写 PREPARE_INTERNAL/WORKLIST.json：
+python scripts/prepare_storyboards.py complete PROJECT.json PREPARE_INTERNAL/WORKLIST.json --output DELIVERY --run-dir FINISH_INTERNAL
+# 仅触发阈值且 FINISH_INTERNAL/PROMPT.json 已就绪：
+python scripts/repair_quality.py finish PROJECT.json G01 FINISH_INTERNAL/PROMPT.json --output PROMPT_DELIVERY/G01_新视频提示词.md
+# 如提示词尚缺风格、纯视觉转换或目标画幅，补齐后：
 python scripts/repair_cycle.py decide PROJECT.json G01
-python scripts/repair_quality.py prepare PROJECT.json G01 PROMPT_INTERNAL_DIR/PROMPT_PLAN.json
-# 代理读取 PROMPT_PLAN.view.json，整批填写精简计划并解决冲突后：
-python scripts/repair_quality.py finish PROJECT.json G01 PROMPT_INTERNAL_DIR/PROMPT_PLAN.json --output PROMPT_DELIVERY_DIR/G01_新视频提示词.md
+python scripts/repair_quality.py prepare PROJECT.json G01 PROMPT_INTERNAL/PROMPT.json
+# 整批填写计划后仍用上面的 finish 命令，路径替换为新计划。
 ```
 
-`python` 指已验证的解释器。只有提供了 Shot 分组才运行 grouping.py 导入行；省略 --apply 可只检查。PROFILE.json 在已有视频模式可为 `{}`。JSON、上下文和工作单均由代理维护，留内部目录，用户无需填写。多来源逐份判断和导出，不按 Shot 数增加生成任务。需要详细可选字段时编辑完整草稿并 check；旧工作单可用 `--legacy-worklist`，原单步入口继续兼容。
+同场景、同连续段的共同约束只写一次：INPUT 的 requirement_templates 指明 scope、must_have/must_not_have 和来源，每镜显式填 requirements_template 引用，程序展开。每镜的阶段、状态变化、剧情关键性及特有要求仍单独填写，不自动跨时空套用；具体格式见镜头要求。
 
-## 必须保留的质量边界
+extract 只提取机械字段，不生成事实阶段、关键性或审查结论；图片相对路径以 IMAGES.json 为基准并转成绝对路径。镜号或字段不明时停止，不擅自重新编号。facts.phase 为 static/before/after，requirements.keyframe.phase 为 entry/action/exit，不能用 current 代替。
 
-- **剧情优先、逐镜独立。** matched 仅表示定位，不等于通过。允许不影响剧情的脸部、服装、姿势、景别及视角差异；人物与行动主体、关键道具、动作结果、空间因果、顺序、必要切镜和用户明确严格要求仍须证据。不检查具体对白逐字、口型、屏幕文字，也不比较视频实测与计划时长。composition 依据已有画面描述与脚本必要信息作规则判断。外观问题沿用剧情影响与本镜证据门槛。
-- **省图与返修分开。** ai_fill 只是建议、未验证，不删镜；最终须有同组有效双侧 PASS＋保留图锚点、资产及状态支持，保护首尾和关键剧情变化，不循环借缺镜作为依据。确认漏镜仍使 story 为 FAIL，其他镜头可独立通过。关键剧情问题或严重画面损坏有充分证据时 1 镜触发；普通影响剧情的错误与确认漏镜按原镜号去重，至少 2 镜且占来源视频全部应覆盖镜头 ≥20% 触发。影响剧情的可推导漏镜也计入，不等待省图判定；纯表演细节、允许的差异和 uncertain 不计入，先补证。达阈值只导出新提示词；证据字段见 [返修证据](references/repair-assessments.md)，bad_num 仍仅统计必要漏图。
-- **时长与交付。** 所有脚本镜头，包括漏镜和 ai_fill，计入计划总时长；合格组为同一 Beat 内相邻镜头，每组4–15秒、≤12镜。镜号按原顺序各覆盖一次，时长精确守恒。自动分组才执行 <8秒短段复核及合法切分重排；输入分组有冲突只提示，不擅改时长或分组。超长单镜提示需拆分，不擅自缩短。仅一张逐镜表：分组、原镜号、镜头时长、脚本描述、小分镜图、检验结果、图片处理、推导依据镜号、问题或修改建议。已有镜头即使建议省图仍显示缩略图和原图；仅确认漏镜且最终批准省图写纯文字“可推导生成”。不输出分组表、视频结论表、视频、HTML或内部记录。
-- **简洁呈现。** 最终表格和图片不使用“待检查”标签。必要补查后仍证据不足，检验结果写“—”、图片处理写“暂不省图”，问题栏写具体缺口及补查方向；已确认漏镜仍写“视频漏镜”。问题或修改建议优先一句短说明，不重复状态、时长、依据镜号或内部证据；多项独立问题各用短句，不省略关键差异。内部 uncertain/pending、补查、计数及返修规则不变。
-- **状态与失效。** 保持来源分级、精确 SHA256/时间/顺序、.lock、review_schema=5/reference_policy_version=5。编号只用于阅读及机械复原绑定，不替代视觉判断；素材或上下文变化后拒绝旧视图，完整证据与指纹仍走原校验。新视频整份重匹配审查；局部变化按状态、省图和边界依赖增量复核，不局限左右一镜，不复用失效结论。
-- **并行与执行。** 默认串行；只有完整事件可独立核对且收益足够时，最多两个只读任务。同一计算状态、独立草稿、唯一写回；协调复核边界画面和入口/出口状态，最多四个非边界争议及跨任务依赖。默认到提示词交付停止，不自动进入旧 submit/resume/install/repaired 流程。文本导出不占提交额度，也不受 API 密钥、固定工作流安装或支付预算阻挡。旧任务、预算/提交上限、max_retries=1、.lock、三轮上限保持；仅另行明确要求执行或恢复时使用历史入口，submission_unknown 只恢复原任务，不重复提交。
+新项目的用户分组直接写 input_shot_groups，已有项目才用 grouping.py 导入。--input 只创建新项目，不覆盖旧文件，其余相对路径以 PROJECT.json 为基准。prepare 可省略 --images 使用项目已有对应表；可选 --original-prompt PROMPT.txt 只记录路径，未达阈值不打开、不分析。触发后读取原文并绑定来源，再筛选与脚本相容的视觉细节；读文件或筛选缺项不影响报告交付。complete --target-aspect 16:9 仅供已经确定混用图片的目标画幅时使用。不要求用户填写这些参数或工作单。
 
-整理的同一批次执行 [要求前置自检](references/shot-requirements.md#整理阶段的要求前置自检)，普通视线、朝向、景别、运镜和微表情不写成硬要求；剧情关键或用户明确严格要求仍保护。首次审查就在 shot_reviews.reason 简述值得用户知晓的允许差异及不影响剧情的依据，随表格交付，不留到冻结后补写。正常单事件路径仍为整理、匹配、审查三次 LLM 判断；工具负责规划及渲染。默认记录各阶段与总墙钟，包含失败、等待和重试；不以机械重放冒充视觉提速，不承诺固定速度或 token 降幅。
+## 质量与交付边界
+
+- **参考图标准。** 判断“是否符合该镜脚本并适合作为生成参考”。完整动作仍保留在脚本和新视频提示词中；参考阶段不改变剧情或降低人物、关键道具和可见状态的约束。外观差异按剧情影响判断；普通脸型、服装、角度等差异不单独制造错误。
+- **分组与省图。** 沿用同 Beat 内相邻镜头、每组 4–15 秒、最多 12 镜，保留计划时长。省图需同组双侧 PASS 且保留的原图锚点、当前资产及状态依据，不循环推导，保护首尾和关键变化。FAIL／uncertain 暂不省图。输入分组冲突只提示，不成为画面 FAIL 或返修理由。
+- **阈值。** 一处有证据的关键剧情错误，或一处妨碍必要内容辨认的严重画面损坏，或普通明确错误涉及至少两镜且占整批镜头至少 20%。按原镜号去重：2/10 触发，2/11 不触发。待核查、合理差异及输入问题不计入分子；分组、省图和待核查不改变整批分母。图片流程没有 absent、漏镜率、必要漏镜、可推导漏镜或补帧建议。
+- **报告。** 01_分镜图审查.md 和 images/，仅一张九列表：分组、原镜号、镜头时长、脚本描述、小分镜图、检验结果、图片处理、推导依据镜号、问题或修改建议。通过镜头的最后一栏只写“符合脚本”，不追加问题、允许差异解释或修改建议；省图及依据留在专列。保留、省图、待核查均展示并保存原图。待核查显示“—／暂不省图”，写需放大或澄清的具体信息；不符合项写分镜图问题及修正建议。内部 JSON 不放用户交付目录。
+- **提示词。** 覆盖整批所有镜头，每镜 1 秒、静音；保留资产对应、逐镜正文、固定预演要求和资产风格。使用原资产，原提示词仅作可筛选的视觉参考，不是审查证据。对白／OS／VO 使用来源绑定的纯视觉转换，不能发明动作补剧情。交付直接可复制，不含内部路径、参数表、代码块或返修标签。
+- **失效与冻结。** workflow=storyboard_images、source.kind=provided、review_schema=6、reference_policy_version=5。证据记录原图、哈希和顺序，不制造视频时间或来源。图片、脚本、资产、要求或分组变化后重新核验审查、连续性、省图及提示词依赖；原交付不覆盖，修订另存新目录并保留关联记录。
+- **速度。** 默认串行整批整理和整批视觉审查，无视频匹配轮次；工具在一次操作内复用哈希、图片信息与上下文，结束前重验文件内容。共同要求复用，按阶段读取精简规则；不逐镜调用工具，不重复预检和渲染，不为未达阈值项目读取原提示词或准备新提示词。自动交付校验后不重复人工核对。按需要看原图细节，不能以缩略图或缓存代替必要判断。记录工具及总墙钟，机械测试不得冒充模型视觉提速或保证固定速度。

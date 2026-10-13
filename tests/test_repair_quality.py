@@ -31,7 +31,8 @@ def fixture():
                   assets=[dict(id='A01', path='reference.png', sha256='asset-hash')],
                   asset_style=dict(assets=[dict(asset_id='A01', guidance='遵循金属表面质感。')]),
                   visual_adaptations={}, previs_directive=repair_cycle.PREVIS_DIRECTIVE,
-                  format_requirements=[], aspect_ratio='16:9', duration_seconds=3.0)
+                  format_requirements=[], aspect_ratio='16:9', duration_seconds=3.0,
+                  input_aspect=dict(selection='common_images', aspect_ratio='16:9'))
     p = dict(assets=[dict(id='A01', description='金属设备参考图')])
     plan = quality.template(source)
     plan['preserves_story'] = True

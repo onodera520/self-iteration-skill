@@ -118,7 +118,7 @@ def input_views(shots, original, resolved, source_numbers):
 
 
 def validate(request, shot_ids):
-    """Collect independent prompt errors before the immutable request/submit gate."""
+    """Collect independent prompt errors before the immutable prompt export gate."""
     errors = []
     blocks, prompt = request.get('blocks', []), request.get('prompt', '')
     if [b.get('shot_id') for b in blocks] != shot_ids:

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import unittest
 
-import test_previs  # Adds the local scripts directory, as in the other regression tests.
+import storyboard_fixtures  # Adds the local scripts directory.
 import repair_prompt as prompt
 
 

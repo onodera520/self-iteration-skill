@@ -1,42 +1,71 @@
-"""Sequential post-review finish, with no visual judgments or paid submissions."""
-from __future__ import annotations
-import argparse
-import copy
-import re
+"""Automatic source/content checks for an already rendered image report."""
 from pathlib import Path
+import re
 from PIL import Image
-
 import previs as core
 import planner
-import repair_cycle as repair
-from evidence_runtime import evidence_operation
-from review_timing import measured, utc_now
-from repair_readiness import diagnose
 
 
-def validate_delivery(p, stage):
-    """Check immutable bytes, declared table format, shot order and thumbnails."""
-    from storyboard import text_only_fill
+def validate_delivery(p, stage, project=None):
+    """Check delivery bytes; new image reports also bind cells and previews to sources."""
     record = p['repair_deliveries'][stage]
     md = Path(record['path']).resolve()
     core.require(record['aggregation_fingerprint'] == core.digest(p['aggregation']), 'Delivery aggregation stale')
     core.require(all(Path(f).is_file() and core.sha(Path(f)) == h for f, h in record['files'].items()),
                  'Immutable delivery changed')
     text = md.read_text(encoding='utf-8')
-    table_count = record.get('table_count', 2)  # Frozen legacy deliveries stay immutable.
-    core.require(table_count in (1, 2), 'Unknown delivery table format')
+    table_count = record.get('table_count', 1)
+    core.require(table_count == 1, 'Unknown delivery table format')
     core.require(sum(line.startswith('| --- |') for line in text.splitlines()) == table_count,
                  f'Expected exactly {table_count} table(s)')
     rows = [re.split(r'(?<!\\)\|', line)[1:-1] for line in text.splitlines() if line.startswith('|')]
     rows = [r for r in rows if len(r) == 9 and r[1].strip() not in ('原镜号', '---')]
     core.require([r[1].strip() for r in rows] == [s['id'] for s in p['shots']], 'Delivery shot order/coverage changed')
     decisions = {d['shot_id']: d for d in p['aggregation']['decisions']}
+    expected = None
+    if record.get('delivery_format_version', 1) >= 3:
+        from storyboard_inputs import enabled
+        from storyboard import delivery_row, delivery_escape, current_image
+        core.require(enabled(p), 'Unknown delivery content validation format')
+        project = Path(project or record['source_project']).resolve()
+        core.require(planner.current_aggregation(p, project), 'Delivery review/aggregation stale')
+        reviews = {g['id']: core.review_current(p, project, g['id']) for g in p['groups']}
+        core.require(all(reviews.values()), 'Delivery needs current accepted reviews')
+        expected = {}
+        for shot in p['shots']:
+            sid, decision = shot['id'], decisions[shot['id']]
+            group = next(g for g in p['groups'] if sid in g['shot_ids'])
+            cells, _ = delivery_row(p, shot, decision, p['aggregation']['groups'], reviews[group['id']])
+            source = current_image(p, project, sid)
+            core.require(source, 'Every provided shot needs its original image')
+            original = f"images/{sid}-{source['sha256'][:12]}{Path(source['path']).suffix.lower()}"
+            thumb = f"images/thumb-{sid}-{core.digest([decision, (source, False)])[:12]}.png"
+            cells[4] = f"[![{delivery_escape(sid)} · {delivery_escape(cells[5])}](<{thumb}>)](<{original}>)"
+            expected[sid] = dict(cells=cells, source=source, original=original, thumb=thumb)
+        files = {str(md), *(str(md.parent / item[key]) for item in expected.values() for key in ('original', 'thumb'))}
+        core.require(set(record['files']) == files
+                     and {str(f.resolve()) for f in md.parent.rglob('*') if f.is_file()} == files,
+                     'Delivery file set differs from the report and original images')
     pictures = 0
     for row in rows:
         sid, picture = row[1].strip(), row[4].strip()
-        if text_only_fill(decisions[sid]):
-            core.require(picture == '可推导生成', 'Absent ai_fill must not create an image/link')
-            continue
+        if expected is not None:
+            item = expected[sid]
+            core.require([cell.strip() for cell in row] == item['cells'],
+                         f'Delivery content differs from accepted review/script: {sid}')
+            source = core.resolve(project, item['source']['path'])
+            core.require(core.sha(source) == item['source']['sha256']
+                         and core.sha(md.parent / item['original']) == item['source']['sha256'],
+                         f'Delivery original image does not match shot: {sid}')
+            # Compare only the preview pixels; no second report render, OCR or model call.
+            from PIL import ImageOps
+            with Image.open(source) as img:
+                preview = ImageOps.contain(ImageOps.exif_transpose(img).convert('RGB'), (240, 135))
+            canvas = Image.new('RGB', (240, 135), '#edf0f4')
+            canvas.paste(preview, ((240-preview.width)//2, (135-preview.height)//2))
+            with Image.open(md.parent / item['thumb']) as img:
+                core.require(img.crop((0, 0, 240, 135)).convert('RGB').tobytes() == canvas.tobytes(),
+                             f'Delivery thumbnail does not match shot: {sid}')
         links = re.findall(r'\]\(<([^>]+)>\)', picture)
         core.require(links, 'Present or non-fill shot needs a local thumbnail')
         for i, link in enumerate(links):
@@ -54,144 +83,3 @@ def validate_delivery(p, stage):
 def intact(record):
     core.require(all(Path(f).is_file() and core.sha(Path(f)) == h for f, h in record['files'].items()),
                  'Immutable delivery changed')
-
-
-def finish(project, profile, output, run_dir, stage='original', delivery_only=False,
-           revision_reason=None, resume_from=None):
-    project, output, run_dir = (Path(v).resolve() for v in (project, output, run_dir))
-    core.require(stage in ('original', 'repaired'), 'Unknown finish stage')
-    core.require(not run_dir.exists() and not project.is_relative_to(run_dir)
-                 and not run_dir.is_relative_to(output) and not output.is_relative_to(run_dir),
-                 'Use a fresh internal run directory separate from delivery and project')
-    report = dict(schema='finish-review-2', project=str(project), stage=stage, profile_digest=core.digest(profile),
-                  started_at=utc_now(), status='running', phases=[], decisions={},
-                  delivery_only=delivery_only, revision_reason=revision_reason)
-    # Acquire the project lock before creating any output. No nested CLI writers.
-    with core.locked(project):
-        run_dir.mkdir(parents=True)
-        try:
-            prior_run = None
-            if resume_from:
-                resume_from = Path(resume_from).resolve()
-                prior_run = core.read(resume_from)
-                core.require(prior_run.get('project') == str(project) and prior_run.get('stage') == stage
-                             and prior_run.get('profile_digest') == core.digest(profile), 'Recovery must use the same project, stage and profile')
-                report['resumed_from'] = str(resume_from)
-            with measured(report['phases'], 'preflight'):
-                with evidence_operation():
-                    p = core.read(project)
-                    core.require(p['config'].get('video_source') == 'imported', 'Imported video only')
-                    core.validate(p, project)
-                    for group in p['groups']:
-                        r = core.review_current(p, project, group['id'])
-                        core.require(r, 'Current review required: ' + group['id'])
-                        diagnostics = diagnose(p, r)
-                        if diagnostics.errors or diagnostics.blocked:
-                            report['decisions'][group['id']] = dict(status='blocked', errors=diagnostics.errors,
-                                                                   blocked=diagnostics.blocked,
-                                                                   reason='repair_assessments incomplete')
-                if report['decisions'] and not delivery_only:
-                    report.update(status='preflight_blocked', next_action='Complete listed assessments and register the group review; rerun finish with a fresh run-dir and --resume-from this report. No delivery was frozen.')
-                    return report
-            with measured(report['phases'], 'planning'):
-                with evidence_operation():
-                    plan = planner.current_aggregation(p, project)
-                    if not plan or plan.get('profile') != profile:
-                        plan = planner.post_review_plan(p, project, profile)
-                    if core.digest(p.get('aggregation')) != core.digest(plan):
-                        planner.store_aggregation(p, project, plan)
-                core.save(run_dir / 'AGGREGATION.json', plan)
-            with measured(report['phases'], 'repair_decisions'):
-                for group in p['groups']:
-                    if group['id'] in report['decisions']:
-                        p.get('repair_decisions', {}).pop(group['id'], None)
-                        continue  # Explicit legacy delivery-only path, never a no-repair verdict.
-                    try:
-                        with evidence_operation():
-                            candidate = copy.deepcopy(p)
-                            decision = repair.decide(candidate, project, group['id'])
-                        p = candidate
-                        report['decisions'][group['id']] = dict(status='complete', decision=decision)
-                    except ValueError as exc:
-                        # Structural omissions were collected above. Integrity failures must not
-                        # be downgraded to a legacy missing-field warning.
-                        raise ValueError('Repair decision failed for ' + group['id'] + ': ' + str(exc)) from exc
-                core.save(project, p)
-                core.save(run_dir / 'REPAIR_DECISIONS.json', report['decisions'])
-            with measured(report['phases'], 'delivery'):
-                with evidence_operation():
-                    candidate = copy.deepcopy(p)
-                    previous = p.get('repair_deliveries', {}).get(stage)
-                    if previous:
-                        intact(previous)
-                        if previous['aggregation_fingerprint'] != core.digest(plan):
-                            core.require(isinstance(revision_reason, str) and revision_reason.strip(),
-                                         'Immutable delivery belongs to an earlier aggregation; use --revision-reason and a new empty output directory')
-                            candidate.setdefault('repair_delivery_history', []).append(dict(
-                                stage=stage, record=copy.deepcopy(previous), revision_reason=revision_reason,
-                                superseded_at=utc_now()))
-                            del candidate['repair_deliveries'][stage]
-                    pending = prior_run.get('pending_delivery') if prior_run else None
-                    if pending and pending['base_digest'] == core.digest(p):
-                        core.require(core.sha(Path(pending['path'])) == pending['sha256'], 'Pending delivery checkpoint changed')
-                        checkpoint = core.read(pending['path'])
-                        core.require(checkpoint['output'] == str(output) and checkpoint['stage'] == stage
-                                     and checkpoint['revision_reason'] == revision_reason,
-                                     'Resume staged delivery with the same output, stage and revision reason')
-                        candidate.setdefault('repair_deliveries', {})[stage] = checkpoint['record']
-                        intact(checkpoint['record'])
-                        report['delivery_reused'] = True
-                        report['delivery'] = checkpoint['record']['path']
-                    else:
-                        report['delivery'] = repair.snapshot(candidate, project, output, stage)
-                    checkpoint_path = run_dir / 'PENDING_DELIVERY.json'
-                    core.save(checkpoint_path, dict(record=candidate['repair_deliveries'][stage], output=str(output),
-                                                    stage=stage, revision_reason=revision_reason))
-                    report['pending_delivery'] = dict(path=str(checkpoint_path), sha256=core.sha(checkpoint_path),
-                                                       base_digest=core.digest(p))
-                # Persist the recovery pointer before validation; this is not a frozen delivery.
-                core.save(run_dir / 'FINISH_REPORT.json', report)
-            with measured(report['phases'], 'delivery_validation'):
-                with evidence_operation():
-                    core.require(planner.current_aggregation(candidate, project), 'Evidence changed before delivery validation')
-                    if previous:
-                        intact(previous)
-                    report['validation'] = validate_delivery(candidate, stage)
-                core.require(core.digest(core.read(project)) == core.digest(p), 'Project changed before delivery freeze')
-                core.save(project, candidate)
-            report['status'] = ('complete' if all(d['status'] == 'complete' for d in report['decisions'].values())
-                                else 'delivery_complete_decision_blocked')
-            report['next_action'] = ('Inspect the per-shot table and images once. For triggered sources, complete prompt preparation, rerun decide and use export-prompt; deliver text then stop. Do not submit or generate a video.'
-                                     if report['status'] == 'complete' else
-                                     'Legacy delivery only; repair decision blocked. Complete review then use --revision-reason with a new output directory.')
-        except Exception as exc:
-            report.update(status='failed', error=str(exc))
-            raise
-        finally:
-            report['ended_at'] = utc_now()
-            report['failed_phase'] = next((x['phase'] for x in report['phases'] if x['status'] == 'failed'), None)
-            if report['status'] == 'failed':
-                report['next_action'] = 'Fix the reported failure; use a fresh run-dir and --resume-from this report. Reuse staged output only with unchanged inputs; never rebind old evidence.'
-            core.save(run_dir / 'FINISH_REPORT.json', report)
-    return report
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('project'); ap.add_argument('profile')
-    ap.add_argument('--output', required=True)
-    ap.add_argument('--run-dir', required=True, help='Fresh directory for internal reports/timing')
-    ap.add_argument('--stage', choices=('original', 'repaired'), default='original')
-    ap.add_argument('--delivery-only', action='store_true', help='explicit legacy path: allow missing repair assessments, report blocked')
-    ap.add_argument('--revision-reason', help='preserve old frozen delivery and create a linked revision in a new output directory')
-    ap.add_argument('--resume-from', help='previous FINISH_REPORT.json; reuse only verified current state')
-    a = ap.parse_args()
-    result = finish(a.project, core.read(a.profile), a.output, a.run_dir, a.stage,
-                    a.delivery_only, a.revision_reason, a.resume_from)
-    print(result['status'], result.get('delivery', 'no frozen delivery'))
-    print(result['next_action'])
-    raise SystemExit(0 if result['status'] == 'complete' else 2)
-
-
-if __name__ == '__main__':
-    main()

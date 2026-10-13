@@ -1,0 +1,66 @@
+{
+  "input_version": 1,
+  "title": "精简输入示例：钥匙交接",
+  "source_script": "S01 门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。\nS02 中景，男孩接住钥匙，女孩松手。",
+  "assets": [
+    {"id": "girl", "kind": "character", "description": "黄外套女孩", "path": "assets/girl.png"},
+    {"id": "boy", "kind": "character", "description": "蓝外套男孩", "path": "assets/boy.png"},
+    {"id": "hall", "kind": "scene", "description": "木门旁的门厅", "path": "assets/hall.png"},
+    {"id": "key", "kind": "prop", "description": "带红色挂件的钥匙", "path": "assets/key.png"}
+  ],
+  "requirement_templates": {
+    "hall_key": {
+      "scope": {"scene_id": "hall", "continuity_id": "handoff", "asset_ids": ["key"]},
+      "must_have": ["同一把红挂件钥匙可辨认"],
+      "must_not_have": ["出现第二把钥匙"],
+      "provenance": [{"field": "must_have,must_not_have", "status": "script", "source": "S01–S02：同一把红挂件钥匙从女孩交给男孩"}]
+    }
+  },
+  "input_shot_groups": [["S01", "S02"]],
+  "shots": [
+    {
+      "id": "S01",
+      "script": "门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。",
+      "image": "storyboards/S01.png",
+      "scene_id": "hall",
+      "continuity_id": "handoff",
+      "duration": 2,
+      "duration_source": {"kind": "inference", "ref": "示例建议时长；实际填写用户计划时长及其来源"},
+      "asset_ids": ["girl", "boy", "hall", "key"],
+      "required_result": "建立两人与唯一钥匙的位置关系",
+      "facts": [{"entity": "key", "attribute": "holder", "value": "girl", "status": "known", "phase": "before", "critical": true, "source": {"kind": "script", "ref": "S01：女孩手持红挂件钥匙"}}],
+      "intent": {"critical_result": false, "narrative_turn": false, "required_cut": false},
+      "requirements_template": "hall_key",
+      "requirements": {
+        "status": "ready",
+        "entry_state": {"key.holder": "girl"},
+        "keyframe": {"phase": "entry", "description": "女孩持红挂件钥匙，男孩站在木门旁"},
+        "must_have": ["女孩持有唯一的红挂件钥匙", "两人与木门的位置关系可辨认"],
+        "provenance": [{"field": "purpose,entry_state,keyframe,must_have", "status": "script", "source": "S01：女孩手持红挂件钥匙，男孩站在木门旁"}]
+      }
+    },
+    {
+      "id": "S02",
+      "script": "中景，男孩接住钥匙，女孩松手。",
+      "image": "storyboards/S02.png",
+      "scene_id": "hall",
+      "continuity_id": "handoff",
+      "duration": 2,
+      "duration_source": {"kind": "inference", "ref": "示例建议时长；实际填写用户计划时长及其来源"},
+      "asset_ids": ["girl", "boy", "hall", "key"],
+      "required_result": "确认唯一钥匙交接完成",
+      "facts": [{"entity": "key", "attribute": "holder", "value": "boy", "status": "known", "phase": "after", "critical": true, "source": {"kind": "script", "ref": "S02：男孩接住钥匙，女孩松手"}}],
+      "intent": {"critical_result": true, "narrative_turn": false, "required_cut": false},
+      "requirements_template": "hall_key",
+      "state_changes": [{"entity": "key", "attribute": "holder", "before": "girl", "after": "boy", "critical": true, "authorized": true, "source": {"kind": "script", "ref": "S02：男孩接住钥匙，女孩松手"}}],
+      "requirements": {
+        "status": "ready",
+        "inherits_from": "S01",
+        "keyframe": {"phase": "exit", "description": "男孩拿稳红挂件钥匙，女孩已经松手"},
+        "must_have": ["男孩拿稳唯一钥匙", "女孩已经松手"],
+        "must_not_have": ["女孩仍持有钥匙"],
+        "provenance": [{"field": "purpose,inherits_from,keyframe,must_have,must_not_have", "status": "script", "source": "S02：男孩接住钥匙，女孩松手；承接 S01 的同一把钥匙"}]
+      }
+    }
+  ]
+}

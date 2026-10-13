@@ -1,45 +1,23 @@
-# 首轮审查的返修证据字段
+# 图片审查的返修证据
 
-本文件只规定原有组级审查顺便填写的证据，不启动返修、不增加逐镜判断。达阈值后才读 [新视频提示词](auto-repair.md) 并整批准备、导出文本；默认不执行生成。历史付费与恢复仅在另行明确要求时读取。视觉规则仍以 review.md 为准。
-
-首次整理将 `shots[].script` 保存为该镜原始脚本文本（含标点、换行），不得摘要；`source_script` 保留完整输入。可选 `video_format_requirements` 只能逐字摘录原文中的全局格式要求。`repair_cycle.py baseline` 冻结基准。生成提示词时工具移出明确的镜头头部；含对白、OS/VO 或说话表演的字段使用独立、绑定来源的纯视觉转换，见 [受控提示词](auto-repair.md#受控提示词)。不修改原始字段或基准，不手工改请求。旧项目只存摘要时，从原输入恢复并重建有效审查；真实脚本修订须创建独立项目版本，不得清除已占用付费额度。
-
-在每份来源视频的组级审查中填写 `repair_assessments`：每个确认 `FAIL` 或 `absent` 镜头恰有一条，无此类镜头时填空数组；PASS 和 uncertain 不填。以下仅为字段示意，必须换为本案真实证据：
+在同一次看图中填写，每个确认 FAIL 恰有一条 repair_assessment；PASS／uncertain 不填，无 FAIL 用空数组。不增加逐镜判断。prepare_storyboards.py complete 冻结前集中检查，不自动填判断、引文或修正。
 
 ```json
-{
-  "shot_id": "S03",
-  "critical": true,
-  "critical_kind": "wrong_transfer_result",
-  "affects_story": true,
-  "script_quote": "钥匙交接完成，钥匙在乙手中。",
-  "issue_ids": ["I03"],
-  "impact": "钥匙仍在甲手中，使交接结果相反。",
-  "correction": "明确呈现乙接住钥匙，结束时钥匙留在乙手中；其他镜头遵循原文。",
-  "preserves_script": true
-}
+{"shot_id":"S03","critical":true,"critical_kind":"wrong_transfer_result","affects_story":true,"script_quote":"男孩接住钥匙，女孩松手","issue_ids":["I03"],"impact":"结束阶段仍由女孩持钥匙，交接结果相反","correction":"在该参考阶段呈现男孩拿稳钥匙、女孩松手，保留其他脚本内容","preserves_script":true}
 ```
 
-`critical_kind` 仅用于关键问题，可取 missing_key_node / wrong_actor / broken_causality / wrong_transfer_result / explicit_key_requirement。不能仅用“严重”定级；必须引用本镜原文、本镜问题和有效证据。已定位错误引用同镜有效帧及实际时间；确认漏镜引用覆盖整个原视频的有效补查记录，不伪造图片。稀疏抽帧不证明 absent。
+critical 与 affects_story 显式布尔。script_quote 是同镜 script 的逐字非空片段；issue_ids 唯一且均属本镜。impact 写具体影响；correction 只恢复原意，preserves_script=true。同镜 issues 绑定有效原图与 SHA256，repair_target=storyboard_image，不填写时间。不能借邻镜证据或凭提示词证明画面问题。
 
-工具只验证引文、镜号、关联和字段完整性，不能证明视觉或修复语义真实。审查者须确认影响与关键程度，补充仅恢复本镜原意，不添加事件、改变其他镜约束或资产编号。已有证据不足就保留 uncertain，不猜测修复依据。
+关键问题还需 affects_story=true，critical_kind 为 missing_key_node／wrong_actor／broken_causality／wrong_transfer_result／explicit_key_requirement，并说明关键作用。普通外观、表演或构图差异无剧情影响且无明确严格要求，不制造 FAIL。阶段不清或关键内容无法辨认先放大／澄清，仍不足则 uncertain，不猜修复。
 
-视频返修与参考图取舍独立：关键问题 1 镜即触发；普通影响剧情的 FAIL 或确认 absent 按原镜号去重，至少 2 镜且占来源视频全部应覆盖镜头 ≥20% 时触发。确认影响剧情的漏镜即使可推导省图，或参考图必要性尚未确定，也计入。纯表演细节、允许的差异和 uncertain 不计入；bad_num 只保留为必要漏图统计，不控制最终返修门槛。
-
-严重画面损坏影响必要动作辨认时，也可 1 镜触发。该镜须为有证据的 FAIL、affects_story=true；在对应 repair_assessment 增加以下可选块，普通问题不填，轻微闪烁不使用：
+严重画面损坏仅在妨碍脚本必需内容辨认的确认 FAIL、affects_story=true 时填写：
 
 ```json
-{
-  "severe_visual_damage": {
-    "damage_description": "交接时手部与钥匙破碎成杂色块。",
-    "obscured_content": "无法辨认谁接住钥匙，交接结果不可读。",
-    "time_range": [2.0, 2.5]
-  }
-}
+{"severe_visual_damage":{"damage_description":"交接手部与钥匙破碎为杂色块","obscured_content":"无法辨认必要的持物关系","image_sha256":"同镜原图SHA256"}}
 ```
 
-受损区间须为有限非负时间且起点小于终点，包含本镜 evidence_times 中的有效帧；issue_ids 中至少一个本镜问题的 time_range 覆盖受损区间。不能借邻镜证据，也不能用 absent 或 uncertain 触发损坏分支。单镜多问题只计一次。工具验证结构和绑定，不能证明损坏描述及其严重程度真实；审查者仍按视频和原脚本判断。
+image_sha256 须在本镜 evidence_sha256 且有同镜 evidence，issue_ids 至少关联一个同镜问题。无 time_range；轻微瑕疵不使用此分支。工具验证结构及绑定，严重程度、关键性和修复保真仍来自实际判断。
 
-`correction` 优先直接写已有画面动作、表情、位置和结果，不写台词原句、OS/VO 或“开口说/问/解释”等表演要求。`script_quote` 等内部证据仍逐字保留，不发送为生成正文。转换不是修复剧情的新授权，不能把对白中独有的信息擅自改成新动作。
+阈值按整批全部脚本镜头：关键剧情错误一镜，或上述严重损坏一镜，或普通明确 FAIL 至少两镜且占比至少 20%。普通错误无额外 affects_story=true 门槛。同镜多问题去重；2/10 触发、2/11 不触发。uncertain、输入问题与合理差异不计分子；省图、待核查或分组不改分母。未触发的 FAIL 仍原样留在报告。
 
-默认在 review_draft.py check/fill 和 finish_review.py 冻结前检查这些字段，按镜号一次报告独立缺项，不自动填布尔值、引文或判断。旧审查仅在明确走“只交付、返修判定受阻”路径时，对 check 和 finish 显式使用 --delivery-only；原始 review 接口仍兼容旧记录，但不代表已满足返修预检。优先利用有效事实一次补齐组级审查；若此前已冻结交付，按 [执行提效](efficiency.md#单入口收尾) 创建关联修订，不覆盖旧文件、不重置付费谱系。review_schema=5 / reference_policy_version=5 不变；独立 repair policy=3 纳入返修绑定，旧版返修判定须重算，可复用仍有效的审查与证据。已提交的历史任务保持原请求恢复，不据此重提或扩大额度。返修阈值不等同于审查是否通过。
+correction 优先已有动作、表情、位置、道具与结果，不引入台词／OS／VO 或新动作。证据引文保留内部；必要纯视觉转换在阈值触发后与资产风格、原提示词筛选同批完成，见 [提示词规则](auto-repair.md)。要求或来源变化后重新核验，旧交付另存不覆盖。

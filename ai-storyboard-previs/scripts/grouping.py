@@ -1,4 +1,4 @@
-"""Narrative-first imported-video partitioning. No media or paid operations."""
+"""Narrative-first image grouping with fixed-partition conflict collection."""
 from decimal import Decimal
 import re
 
@@ -82,7 +82,7 @@ def parse_input_groups(value, shot_ids):
 def input_partition(p, blocked_starts=None):
     """Collect all fixed-partition conflicts; never mutate or fall back to auto.
 
-    None means cross-video checks are deferred until evidence-bound reviews are
+    None defers batch-boundary checks until evidence-bound reviews are
     available. An explicit collection contains boundaries not yet approved.
     """
     if not has_input_groups(p):
@@ -139,7 +139,7 @@ def input_partition(p, blocked_starts=None):
         if len({shots[positions[s]].get('beat', {}).get('id') for s in known}) > 1:
             problem('beat', '不得跨 Beat 分组', [i], known)
         if blocked_starts is not None and indexes and any(min(indexes) < b <= max(indexes) for b in blocked_starts):
-            problem('source_boundary', '跨来源视频边界尚未检验通过', [i], known)
+            problem('source_boundary', '跨审查批次边界尚未检验通过', [i], known)
     for gid in {g['id'] for g in groups if isinstance(g['id'], str)}:
         indexes = [i for i, g in enumerate(groups) if g['id'] == gid]
         if len(indexes) > 1:
@@ -312,7 +312,7 @@ def partition(p, blocked_starts=()):
             return '合并将超过15秒'
         for j in range(a+1, b):
             if j in blocked:
-                return '跨来源视频边界尚未检验通过'
+                return '跨审查批次边界尚未检验通过'
             if ss[j]['continuity_id'] != ss[j-1]['continuity_id']:
                 return '明确时空或连续性边界'
             if ss[j].get('beat', {}).get('id') != ss[j-1].get('beat', {}).get('id'):

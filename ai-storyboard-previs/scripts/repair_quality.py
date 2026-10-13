@@ -248,7 +248,7 @@ def compile_request(plan, source, p):
     else:
         for block, row in zip(result['blocks'], plan['shots']):
             block['compiled_content'] = row['content']
-    # One canonical visual body per shot for both export and optional paid requests.
+    # One canonical visual body per shot for the audited export.
     from repair_export import render_prompt
     plain = render_prompt({}, result).strip()
     internal = plain.replace('【时长】1s。', '【生成时长】1.0s。')
@@ -284,7 +284,7 @@ def main():
     ap.add_argument('group')
     ap.add_argument('plan_file')
     ap.add_argument('--apply', action='store_true', help='check and register the completed plan under the project lock')
-    ap.add_argument('--detailed', action='store_true', help='prepare the legacy per-source-excerpt draft')
+    ap.add_argument('--detailed', action='store_true', help='prepare a detailed per-source-excerpt draft')
     ap.add_argument('--output', help='finish: separate user-facing Markdown output')
     args = ap.parse_args()
     core.require(args.action == 'check' or not args.apply, '--apply is only for check')
@@ -297,7 +297,14 @@ def main():
             core.save(args.project, p)
             print('Audited prompt exported: ' + record['path'])
             return
-        request = source_request(p, args.project, args.group)
+        pending = args.group in p.get('deferred_storyboard_prompts', {})
+        try:
+            request = source_request(p, args.project, args.group)
+        except ValueError:
+            # Keep a newly loaded original prompt available for the required semantic screening.
+            if pending and args.group not in p.get('deferred_storyboard_prompts', {}):
+                core.save(args.project, p)
+            raise
         if args.action == 'prepare':
             plan_file = Path(args.plan_file)
             source_file = plan_file.with_name(plan_file.stem + '.source.json')
@@ -307,6 +314,8 @@ def main():
             core.save(source_file, request)
             core.save(view_file, reading_view(request, p))
             core.save(plan_file, template(request) if args.detailed else compact_template(request))
+            if pending:
+                core.save(args.project, p)
             print(f'Batch prompt draft: {plan_file}\nReading view: {view_file}\nFull source: {source_file}')
         else:
             plan = core.read(args.plan_file)

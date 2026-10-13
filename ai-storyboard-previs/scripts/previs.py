@@ -1,4 +1,4 @@
-"""Project integrity, prompt mapping, versioned review, local repair and readable Markdown."""
+"""Image-project validation, evidence-bound review and Markdown delivery."""
 from __future__ import annotations
 import argparse
 import contextlib
@@ -12,8 +12,6 @@ import re
 import sys
 import uuid
 from evidence_runtime import sha, read_json, verified_read, memo_read
-
-BASE_PROMPT = "参考已有分镜图，严格按照分镜脚本生成一段快速切镜的视频，每个分镜不需要很大的动作幅度。没有台词，没有音乐，不要出现字幕。每个分镜硬切转场。"
 
 
 def require(condition, message):
@@ -106,7 +104,7 @@ def validate(p, project_path):
         c = {}  # Diagnostic scope only; no project defaults are written.
     event_shots = [s for s in shot_rows if "event" in s]
     from grouping import has_input_groups
-    check(has_input_groups(p) or not event_shots or len(event_shots) == len(shot_rows), 'shots.event', "event blocks must cover every shot or be absent for legacy projects")
+    check(has_input_groups(p) or not event_shots or len(event_shots) == len(shot_rows), 'shots.event', "event blocks must cover every shot when supplied")
     event_summaries = {}
     for s in event_shots:
         path = shot_path(s, shot_rows.index(s)) + '.event'
@@ -125,7 +123,7 @@ def validate(p, project_path):
             check(text(a['path']), f'assets[{i}].path', 'asset path must be text')
     for i, s in enumerate(shot_rows):
         path = shot_path(s, i)
-        if (config_ok and c.get("video_source") != "imported") or s.get("duration") is not None:
+        if config_ok:
             check(number(s.get("duration")) and s["duration"] > 0, path + '.duration', "positive shot duration required")
         for key in ('script', 'scene_id', 'continuity_id', 'required_result'):
             check(text(s.get(key)), path + '.' + key, 'shot narrative fields required')
@@ -151,13 +149,8 @@ def validate(p, project_path):
     else:
         report.block('groups.shot_ids', 'invalid shot/group IDs or lists; cannot check source order')
     if config_ok:
-        check(c.get('workflow') in (None, 'video_evidence'), 'config.workflow', 'invalid workflow')
+        check(c.get('workflow') == 'storyboard_images', 'config.workflow', 'invalid workflow')
         check(c.get('video_input_mode', 'anchors') in ('assets', 'anchors'), 'config.video_input_mode', 'invalid video input mode')
-        for key, default in (("max_repair_rounds", 3), ("max_submissions", 0)):
-            check(type(c.get(key, default)) is int and c.get(key, default) >= 0, 'config.' + key, key + " must be nonnegative integer")
-        if 'budget_cny' in c:
-            check(number(c['budget_cny']) and c['budget_cny'] >= 0, 'config.budget_cny', 'invalid budget')
-    check(type(p.get('repair_round', 0)) is int and p.get('repair_round', 0) >= 0, 'repair_round', 'invalid repair_round')
     style_shape(p, report)
     from requirements import contexts
     from grouping import validate_metadata
@@ -190,7 +183,7 @@ def group_fingerprint(p, project_path, g):
     resolved = contexts(p)
     ss = copy.deepcopy(shots(p, g))
     for s in ss:
-        s.pop("board", None)  # Extracted/edited outputs never invalidate their source video.
+        s.pop("board", None)  # Only source images and accepted requirements bind the review.
         if s["id"] in resolved:
             s["resolved_requirements"] = resolved[s["id"]]
         r = s["reference"]
@@ -204,508 +197,57 @@ def group_fingerprint(p, project_path, g):
             path = resolve(project_path, a["path"])
             a["sha256"] = sha(path) if path.is_file() else "MISSING"
     binding = {"group": g, "shots": ss, "assets": asset_rows, "source": p["source_script"], "aspect_ratio": p.get("config", {}).get("aspect_ratio"), "video_input_mode": p.get("config", {}).get("video_input_mode", "anchors")}
-    if "user_video_prompt" in p:
-        binding["user_video_prompt"] = p["user_video_prompt"]
     if "narrative_plan" in p:
         binding["narrative_plan"] = p["narrative_plan"]
+    if p.get('config', {}).get('workflow') == 'storyboard_images':
+        from storyboard_inputs import inputs
+        binding['storyboard_images'] = inputs(p, project_path)
     return digest(binding)
 
 
-def video_references(p, g):
-    if p.get("config", {}).get("video_input_mode") == "assets":
-        used = {aid for s in shots(p, g) for aid in s["asset_ids"]}
-        return [a.get("path") for a in p["assets"] if a["id"] in used]
-    return [s["reference"].get("path") for s in shots(p, g) if s["reference"]["mode"] == "anchor"]
-
-
-def prompt(p, gid):
-    g = group(p, gid)
-    supplied = g.get("video_prompt")
-    if supplied is None and len(p["groups"]) == 1:
-        supplied = p.get("user_video_prompt")
-    if supplied is not None or p.get("config", {}).get("workflow") == "video_evidence":
-        require(isinstance(supplied, str) and supplied.strip(), "user video prompt required; multiple generation groups need group.video_prompt")
-        return supplied + ("\n补充约束：" + g["prompt_notes"] if g.get("prompt_notes") else "")
-    from requirements import contexts, target_text
-    resolved = contexts(p)
-    g = group(p, gid)
-    asset_mode = p.get("config", {}).get("video_input_mode") == "assets"
-    lines = [BASE_PROMPT if not asset_mode else BASE_PROMPT.replace("参考已有分镜图", "参考提供的角色、场景和道具资产图"), "\n图片对应（按下列顺序上传）："]
-    if asset_mode:
-        used = {aid for s in shots(p, g) for aid in s["asset_ids"]}
-        for n, a in enumerate((a for a in p["assets"] if a["id"] in used), 1):
-            lines.append(f"图片{n} → 资产 {a['id']}：{a['description']}。仅作为身份/外观/空间依据，不是一张图对应一个镜头。")
-        lines.append("视频将按原脚本校对并抽帧；每镜保留清晰的构图和关键状态，同时完整表现关键动作及结果，不得用静帧停留替代交接过程。全部镜头须按顺序出现。")
-    n = 0
-    for s in ([] if asset_mode else shots(p, g)):
-        r = s["reference"]
-        if r["mode"] == "anchor":
-            n += 1
-            lines.append(f"图片{n} → {s['id']}，参考角色 {r['role']}。")
-        else:
-            lines.append(f"{s['id']}：无独立图片，由 AI 补足；必须出现此镜头。")
-    lines.append("\n逐镜时间与内容（组内秒数，镜间硬切）：")
-    t = 0.0
-    for s in shots(p, g):
-        end = t + s["duration"]
-        lines.append(f"{s['id']} [{t:g}–{end:g}s] {s['script']} 必须可见的结果：{s['required_result']}")
-        if s["id"] in resolved:
-            lines.append(target_text(resolved[s["id"]], "video"))
-        for f in s.get("facts", []):
-            if f.get("status") == "known" and f.get("source", {}).get("kind") != "inference":
-                lines.append(f"  状态约束 [{f['phase']}] {f['entity']}.{f['attribute']} = {json.dumps(f['value'], ensure_ascii=False)}")
-        for c in s.get("state_changes", []):
-            if c.get("authorized") and c.get("source", {}).get("kind") != "inference":
-                lines.append(f"  本镜授权变化：{c['entity']}.{c['attribute']} 从 {c['before']} 到 {c['after']}。须表现过程与结果，勿提前发生。")
-        t = end
-    if g.get("prompt_notes"):
-        lines.append("补充约束：" + g["prompt_notes"])
-    return "\n".join(lines)
-
-
-def current_video(p, project_path, g, allow_old=False):
-    fp = group_fingerprint(p, project_path, g)
-    if p.get("config", {}).get("video_source") == "imported":
-        candidates = [v for v in p.get("imported_videos", []) if v["target_id"] == g["id"]]
-        for v in reversed(candidates):
-            path = resolve(project_path, v["outputs"][0])
-            if (allow_old or (v["group_fingerprint"] == fp and v["version"] == g["version"])) and path.is_file() and sha(path) == v["output_hashes"][0]:
-                return v, path
-            if not allow_old:
-                return None, None  # A broken replacement cannot silently revive older evidence.
-        return None, None
-    candidates = [t for t in p.get("tasks", {}).values() if t.get("kind") == "video" and t.get("target_id") == g["id"] and t.get("status") == "SUCCESS" and t.get("outputs")]
-    current = [t for t in candidates if t.get("group_fingerprint") == fp and t.get("version") == g["version"]]
-    for t in reversed(current or (candidates if allow_old else [])):
-        f = resolve(project_path, t["outputs"][0])
-        if f.is_file() and t.get("output_hashes", [None])[0] == sha(f):
-            return t, f
-    return None, None
-
-
-def import_video(p, project_path, gid, video):
-    """Register supplied media separately from paid task/submission accounting."""
-    from media import probe, duration
-    require(p.get("config", {}).get("video_source") == "imported", "set video_source: imported first")
-    g = group(p, gid)
-    path = Path(video).resolve()
-    require(path.is_file(), "input video required")
-    metadata = probe(path)
-    require(any(s.get("codec_type") == "video" for s in metadata["streams"]), "video stream required")
-    measured = duration(metadata)
-    require(number(measured) and measured > 0, "positive video duration required")
-    record = dict(target_id=gid, version=g["version"], source="user_video",
-                  group_fingerprint=group_fingerprint(p, project_path, g),
-                  outputs=[str(path)], output_hashes=[sha(path)], duration=measured)
-    p.setdefault("imported_videos", []).append(record)
-    return record
-
-
-@verified_read
-@memo_read
-def video_context(p, project_path, gid):
-    """One immutable group context, plus only the adjacent boundary shots."""
-    from storyboard import current_mapping, current_frame
-    from requirements import contexts
-    resolved = contexts(p)
-    g = group(p, gid)
-    task, path = current_video(p, project_path, g)
-    require(task, "current generated video required")
-    mapping = current_mapping(p, project_path, gid)
-    extraction = read(resolve(project_path, mapping["evidence_file"])) if mapping else None
-    rows = [{"shot_id": s["id"], "script": s["script"], "shot_size": s.get("shot_size"),
-             "requirements": resolved.get(s["id"]), "selected_frame": current_frame(p, project_path, s["id"])} for s in shots(p, g)]
-    for row, s in zip(rows, shots(p, g)):
-        row.update(planned_duration=s.get("duration"), duration_source=copy.deepcopy(s.get("duration_source")))
-        if "beat" in s:
-            row["beat"] = copy.deepcopy(s["beat"])
-        row['requirements_provenance'] = copy.deepcopy((s.get('requirements') or {}).get('provenance', []))
-        if "event" in s:
-            row.update(event=copy.deepcopy(s["event"]), scene_id=s["scene_id"], continuity_id=s["continuity_id"])
-    used_assets = {aid for s in shots(p, g) for aid in s["asset_ids"]}
-    assets = [dict(a, sha256=sha(resolve(project_path, a["path"])) if a.get("path") and resolve(project_path, a["path"]).is_file() else "MISSING")
-              for a in p["assets"] if a["id"] in used_assets]
-    boundaries = []
-    index = p["groups"].index(g)
-    for n, edge in ((index-1, -1), (index+1, 0)):
-        if not 0 <= n < len(p["groups"]):
-            continue
-        other = p["groups"][n]
-        sid = other["shot_ids"][edge]
-        neighbor = next(s for s in p["shots"] if s["id"] == sid)
-        ot, op = current_video(p, project_path, other)
-        om = current_mapping(p, project_path, other["id"])
-        boundaries.append({"group_id": other["id"], "shot_id": sid,
-            "group_fingerprint": group_fingerprint(p, project_path, other),
-            "video_sha256": sha(op) if ot else None,
-            "requirements": resolved.get(sid),
-            "mapping": next(r for r in om["shots"] if r["shot_id"] == sid) if om else None})
-        if p.get("config", {}).get("video_source") == "imported":
-            boundaries[-1]["selected_frame"] = current_frame(p, project_path, sid)
-            if "beat" in neighbor:
-                boundaries[-1]["beat"] = copy.deepcopy(neighbor["beat"])
-            if "event" in neighbor:
-                boundaries[-1].update(event=copy.deepcopy(neighbor["event"]), scene_id=neighbor["scene_id"], continuity_id=neighbor["continuity_id"])
-    result = {"group_id": gid, "version": g["version"], "video_sha256": sha(path),
-              "group_fingerprint": group_fingerprint(p, project_path, g), "video": str(path),
-              "duration": task.get("duration"), "assets": assets, "shots": rows, "mapping": mapping,
-              "extraction": extraction, "boundaries": boundaries}
-    if p.get("config", {}).get("video_source") == "imported":
-        from grouping import has_input_groups, input_partition
-        result["review_schema"] = 5
-        result["reference_policy_version"] = 5  # Story readability, not unique reconstruction.
-        for row, shot in zip(rows, shots(p, g)):
-            row["asset_ids"] = list(shot["asset_ids"])
-        result["grouping_mode"] = "input" if has_input_groups(p) else "automatic"
-        if has_input_groups(p):
-            # Bind review/omission conclusions, without invalidating source video,
-            # mappings or neutral frame observations through group_fingerprint.
-            result["input_shot_groups"] = copy.deepcopy(p["input_shot_groups"])
-            result["input_group_validation"] = input_partition(p)
-        else:
-            result["narrative_plan"] = copy.deepcopy(p.get("narrative_plan"))
-        result["review_scope"] = {"dialogue_text": False, "dialogue_lip_sync": False,
-            "duration_accuracy": False, "visual_actions": True, "subtitles": False,
-            "screen_text": False, "group_checks": ["shot", "continuity", "story"],
-            "reference_omission_basis": "story_readable_without_ambiguity",
-            "unique_visual_reconstruction_required": False,
-            "performance_detail_alone_protected": False,
-            "visual_match_basis": "narrative_equivalence",
-            "noncritical_visual_variations_allowed": True, "explicit_strict_requirements": True,
-            "group_duration_basis": "script_plan", "min_group_seconds": 4, "max_group_seconds": 15,
-            "grouping_scope": "same_beat",
-            "max_group_shots": 12, "short_group_seconds": 8}
-    result["context_fingerprint"] = digest(result)
-    result["previous_review"] = next((copy.deepcopy(r) for r in reversed(p.get("reviews", [])) if r["group_id"] == gid), None)
-    return result
+def review_context(p, project_path, gid):
+    from storyboard_inputs import enabled, context
+    require(enabled(p), 'Only paired storyboard images are supported; prepare the image project first')
+    return context(p, project_path, gid)
 
 
 @verified_read
 def review_current(p, project_path, gid):
-    if gid == "__delivery__":
-        d = p.get("delivery") or {}
-        if not delivery_current(p, project_path):
-            return None
-        version, path, fp = d["revision"], resolve(project_path, d["path"]), d["fingerprint"]
-    else:
-        g = group(p, gid)
-        task, path = current_video(p, project_path, g)
-        if not task:
-            return None
-        version, fp = g["version"], group_fingerprint(p, project_path, g)
-    for r in reversed(p.get("reviews", [])):
-        if r["group_id"] == gid and r["version"] == version and r["video_sha256"] == sha(path) and r.get("fingerprint") == fp and not r.get("stale"):
-            if p.get("config", {}).get("video_source") == "imported" and (
-                    r.get("review_schema") != 5 or r.get("reference_policy_version") != 5 or not r.get("context_fingerprint")):
-                return None
-            if r.get("context_fingerprint") and (gid == "__delivery__" or r["context_fingerprint"] != video_context(p, project_path, gid)["context_fingerprint"]):
-                return None
-            return r
-    return None
+    from storyboard_inputs import enabled, current_review
+    return current_review(p, project_path, gid) if enabled(p) else None
 
 
-def delivery_fingerprint(p, project_path):
-    rows = []
-    for g in p["groups"]:
-        t, path = current_video(p, project_path, g)
-        if not t:
-            return None
-        rows.append([g["id"], group_fingerprint(p, project_path, g), sha(path)])
-    return digest(rows)
-
-
-def delivery_current(p, project_path):
-    d = p.get("delivery") or {}
-    if not d.get("path"):
-        return False
-    path = resolve(project_path, d["path"])
-    return path.is_file() and sha(path) == d.get("sha256") and d.get("fingerprint") == delivery_fingerprint(p, project_path)
-
-
-def validate_imported_review(p, project_path, r, ctx):
-    """Independent shot verdicts; absence uses a rescan, never a fabricated frame."""
-    from storyboard import CHECKS, current_frame
-    if ctx.get("grouping_mode") != "input" and ctx.get("narrative_plan"):
-        require(r.get("grouping_checked") is True, "batch review must check narrative grouping and whole-interval complexity")
-    ids = [s["shot_id"] for s in ctx["shots"]]
-    rows = r.get("shot_reviews", [])
-    require([v.get("shot_id") for v in rows] == ids, "shot_reviews must cover group in order")
-    by_id = {v["shot_id"]: v for v in rows}
-    mappings = {v["shot_id"]: v for v in ctx["mapping"]["shots"]}
-    requirements = {v["shot_id"]: v["requirements"] for v in ctx["shots"]}
-    evidence = r.get("evidence", [])
-    for v in rows:
-        sid, verdict = v["shot_id"], v.get("verdict")
-        require(verdict in ("PASS", "FAIL", "uncertain", "absent") and v.get("reason"), "shot verdict and reason required")
-        mapping = mappings[sid]
-        issues = [i for i in r.get("issues", []) if sid in i["shot_ids"]]
-        times = v.get("evidence_times", [])
-        require(all(any(e["shot_id"] == sid and e["time"] == t for e in evidence) for t in times), "shot evidence must refer to observed frames")
-        if verdict == "absent":
-            require(mapping["status"] == "absent" and mapping.get("full_rescan") and mapping.get("rescan"), "absent verdict requires complete rescan")
-            require(not times and not any(e["shot_id"] == sid for e in evidence), "absent shot cannot claim a matching frame")
-            require(issues and r["checks"]["story"] == "FAIL", "confirmed absence needs a located issue and story FAIL")
-        elif verdict in ("PASS", "FAIL"):
-            require(mapping["status"] == "matched" and times and current_frame(p, project_path, sid), "shot verdict requires matched selected evidence")
-            selected = current_frame(p, project_path, sid)
-            require(any(e["shot_id"] == sid and resolve(project_path, e["path"]) == resolve(project_path, selected["path"])
-                        and e["time"] in times for e in evidence), "shot review must include its selected frame")
-            checks = v.get("checks", {})
-            require(set(checks) == CHECKS and all(x in ("PASS", "FAIL", "uncertain") for x in checks.values()), "all per-shot checks required")
-            if verdict == "PASS":
-                require(all(x == "PASS" for x in checks.values()) and not issues, "shot PASS cannot hide a localized issue")
-                require(requirements[sid] and requirements[sid]["ready"], "shot PASS requires ready requirements")
-                for boundary in r.get("boundary_checks", []):
-                    gi = p["groups"].index(group(p, ctx["group_id"]))
-                    previous = p["groups"][gi-1]["shot_ids"] if gi else []
-                    edge = ids[0] if boundary["shot_id"] in previous else ids[-1]
-                    require(sid != edge or boundary["verdict"] == "PASS", "boundary uncertainty/failure prevents adjacent shot PASS")
-            else:
-                require("FAIL" in checks.values() and issues and "FAIL" in r["checks"].values(), "shot FAIL needs checks and a located issue")
-        else:
-            checks = v.get("checks", {})
-            require(set(checks) == CHECKS and all(x in ("PASS", "FAIL", "uncertain") for x in checks.values()), "all per-shot checks required")
-            require("uncertain" in checks.values() and "FAIL" not in checks.values() and v.get("followup"),
-                    "uncertain shot needs uncertain checks and concrete followup; confirmed FAIL must remain FAIL")
-            require(not all(x == "PASS" for x in r["checks"].values()), "uncertain shot cannot pass group")
-        require(mapping["status"] != "absent" or verdict == "absent", "confirmed absence must stay absent")
-    for a in r["reference_assessments"]:
-        sid = a["shot_id"]
-        v = by_id[sid]
-        derivable = a.get("derivable")
-        require(derivable is None or type(derivable) is bool, "derivable must be boolean or null")
-        if v["verdict"] == "absent":
-            require(not a.get("evidence_times"), "absence assessment uses basis shots and rescan, not same-shot evidence")
-        else:
-            require(a.get("evidence_times", []) == v.get("evidence_times", []), "assessment must reuse shot evidence times")
-        if a["decision"] == "ai_fill":
-            basis = a.get("basis_shot_ids", [])
-            require(v["verdict"] in ("PASS", "absent") and derivable is True, "only passed or confirmed absent shots can be derivable")
-            require(requirements[sid] and requirements[sid]["ready"], "inference requires ready script requirements")
-            used_assets = next(s["asset_ids"] for s in p["shots"] if s["id"] == sid)
-            require(used_assets and all(any(asset["id"] == aid and asset["sha256"] != "MISSING" for asset in ctx["assets"]) for aid in used_assets),
-                    "inference requires current supporting asset images")
-            require(len(basis) == 2 and all(b in by_id for b in basis) and ids.index(basis[0]) < ids.index(sid) < ids.index(basis[1]), "fill needs ordered before/after basis shots")
-            require(all(by_id[b]["verdict"] == "PASS" and current_frame(p, project_path, b) for b in basis), "fill basis must be existing passed frames")
-            require(all(next(x for x in r["reference_assessments"] if x["shot_id"] == b)["decision"] == "anchor" for b in basis), "fill basis must be retained anchors; no circular inference")
-        elif v["verdict"] in ("FAIL", "uncertain"):
-            require(a["decision"] == "pending", "failed/uncertain picture cannot be an approved anchor")
-        if v["verdict"] == "absent" and derivable is True:
-            require(a["decision"] == "ai_fill", "derivable absence needs explicit basis")
-        elif v["verdict"] == "absent":
-            require(a["decision"] == "pending", "non-derivable or undecided absence cannot be a reviewed anchor")
-        if v["verdict"] == "PASS":
-            expected = "ai_fill" if derivable is True else "anchor"
-            require(a["decision"] == expected, "passed shot decision must follow derivable: true needs ai_fill basis; false/null retains anchor")
-    from asset_review import validate_asset_evidence
-    validate_asset_evidence(p, project_path, r, ctx)
-
-
-def record_review(p, project_path, r):
-    imported = p.get("config", {}).get("video_source") == "imported"
-    gid = r["group_id"]
-    if gid == "__delivery__":
-        require(delivery_current(p, project_path), "delivery missing or stale")
-        d = p["delivery"]
-        version, path, fp = d["revision"], resolve(project_path, d["path"]), d["fingerprint"]
-        ids = [s["id"] for s in p["shots"]]
-        duration = d["duration"]
-    else:
-        g = group(p, gid)
-        task, path = current_video(p, project_path, g)
-        require(task is not None, "current generated video required")
-        version, fp, ids = g["version"], group_fingerprint(p, project_path, g), g["shot_ids"]
-        duration = task.get("duration")
-    require(r.get("version") == version and r.get("video_sha256") == sha(path), "review video/version mismatch")
-    evidence_mode = p.get("config", {}).get("workflow") == "video_evidence" or "reference_assessments" in r
-    ctx = None
-    if evidence_mode:
-        require(gid != "__delivery__", "video evidence review is per generation group")
-        ctx = video_context(p, project_path, gid)
-        require(r.get("context_fingerprint") == ctx["context_fingerprint"], "review context changed; reload group evidence")
-        require(ctx["mapping"] and ctx["extraction"], "review needs current extraction and mapping")
-    checks = r.get("checks", {})
-    required_checks = {"shot", "continuity", "story"}
-    if not imported:
-        required_checks.add("subtitles")  # Preserve the separately authorized generation workflow.
-    require(set(checks) == required_checks, "review checks must match scope: " + ", ".join(sorted(required_checks)))
-    require(all(v in ("PASS", "FAIL", "uncertain") for v in checks.values()), "invalid verdict")
-    coverage = r.get("coverage", {})
-    require(coverage.get("shot_ids") == ids, "review must account for every shot in order")
-    require(isinstance(coverage.get("limitations"), list), "coverage limitations required")
-    evidence = r.get("evidence", [])
-    require((evidence or imported) and all(e.get("shot_id") in ids and number(e.get("time")) and e["time"] >= 0 and e.get("observation") for e in evidence), "visible timed evidence required")
-    if duration:
-        require(all(e["time"] <= duration for e in evidence), "evidence beyond video duration")
-    issues = r.get("issues", [])
-    for i in issues:
-        require(all(i.get(k) for k in ("id", "shot_ids", "time_range", "problem", "expected", "actual", "evidence", "repair_target", "fix")), "incomplete issue")
-        require(set(i["shot_ids"]) <= set(ids), "unknown issue shot")
-        require(i.get("severity") in ("low", "medium", "high", "critical"), "invalid severity")
-        require(i["repair_target"] in ("storyboard_image", "video_shot", "editing", "unresolved"), "invalid repair target")
-        tr = i["time_range"]
-        require(len(tr) == 2 and all(number(v) for v in tr) and 0 <= tr[0] <= tr[1] and (not duration or tr[1] <= duration), "invalid issue time range")
-    failed = "FAIL" in checks.values()
-    require(not failed or issues, "FAIL needs actionable evidence-backed issue")
-    passing = all(v == "PASS" for v in checks.values())
-    if ctx:
-        frames = {str(resolve(project_path, f["path"])): f for f in ctx["extraction"]["frames"]}
-        for e in evidence:
-            frame = frames.get(str(resolve(project_path, e.get("path", ""))))
-            require(frame and frame["sha256"] == e.get("sha256") and abs(frame["time"] - e["time"]) < .001,
-                    "review evidence must bind an unchanged extracted frame and actual time")
-        assessments = r.get("reference_assessments", [])
-        require([a.get("shot_id") for a in assessments] == ids, "reference assessments must cover group in order")
-        for a in assessments:
-            require(a.get("decision") in ("anchor", "ai_fill", "pending") and a.get("reason"), "reference decision and reason required")
-            times = a.get("evidence_times", [])
-            if not imported:
-                require(times and all(any(e["shot_id"] == a["shot_id"] and e["time"] == t for e in evidence) for t in times), "reference assessment needs same-shot evidence")
-        if imported:
-            validate_imported_review(p, project_path, r, ctx)
-            require(r.get("review_schema", 5) == 5 and r.get("reference_policy_version", 5) == 5,
-                    "old review version cannot be upgraded without new evidence")
-            r = copy.deepcopy(r)
-            r.update(review_schema=5, reference_policy_version=5)
-        boundary_checks = r.get("boundary_checks", [])
-        require([b.get("shot_id") for b in boundary_checks] == [b["shot_id"] for b in ctx["boundaries"]], "all adjacent boundary checks required")
-        for b, source in zip(boundary_checks, ctx["boundaries"]):
-            require(b.get("verdict") in ("PASS", "FAIL", "uncertain") and b.get("observation"), "boundary observation required")
-            if b["verdict"] == "PASS":
-                require(source["mapping"] and source["mapping"]["status"] == "matched", "boundary PASS needs matched neighboring evidence")
-                require(source["requirements"] and source["requirements"]["ready"], "boundary PASS needs ready requirements")
-            require(b["verdict"] != "FAIL" or checks["continuity"] == "FAIL", "boundary failure must fail continuity")
-            require(b["verdict"] != "uncertain" or checks["continuity"] != "PASS", "uncertain boundary cannot pass continuity")
-    if passing:
-        if ctx:
-            require(all(s["requirements"] and s["requirements"]["ready"] for s in ctx["shots"]), "ready requirements required for video PASS")
-            require(all(s["status"] == "matched" for s in ctx["mapping"]["shots"]), "PASS needs all shots matched")
-        require(not r.get("uncertainties") and not coverage["limitations"], "uncertain evidence cannot PASS")
-        require(not any(i["severity"] != "low" for i in issues), "unresolved substantial issue cannot PASS")
-        require(coverage.get("mapping_verified") is True and {e["shot_id"] for e in evidence} == set(ids), "PASS needs verified mapping and every-shot evidence")
-        spans = coverage.get("actual_shots", []) if not imported else []
-        if imported:
-            # PTS are evidence locations, not a shot-duration acceptance target.
-            r = copy.deepcopy(r)
-            r.update(fingerprint=fp, verdict="PASS", id=uuid.uuid4().hex)
-            p.setdefault("reviews", []).append(r)
-            return r["verdict"]
-        require([s.get("shot_id") for s in spans] == ids, "PASS needs actual ordered shot spans")
-        last = 0.0
-        for s in spans:
-            require(number(s.get("start")) and number(s.get("end")) and abs(s["start"] - last) <= .1 and s["end"] > s["start"], "invalid actual shot timing")
-            last = s["end"]
-        require(duration and abs(last - duration) <= .15, "PASS needs probed duration and complete actual timing")
-        if ctx:
-            for span in spans:
-                require(any(e["shot_id"] == span["shot_id"] and span["start"] <= e["time"] < span["end"] for e in evidence),
-                        "PASS needs evidence inside each actual shot span")
-    if ctx and p.get('config', {}).get('video_source') == 'imported' and 'repair_assessments' in r:
-        from repair_cycle import validate_assessments
-        validate_assessments(p, r)
-    r = copy.deepcopy(r)
-    r.update(fingerprint=fp, verdict="FAIL" if failed else ("PASS" if passing else "uncertain"), id=uuid.uuid4().hex)
-    p.setdefault("reviews", []).append(r)
-    return r["verdict"]
-
-
-def repair(p, project_path, gids, reason):
-    require(reason.strip() and gids and len(set(gids)) == len(gids), "reason and unique groups required")
-    require(p.get("repair_round", 0) < p.get("config", {}).get("max_repair_rounds", 3), "repair round limit reached; retain best result")
-    for gid in gids:
-        r = review_current(p, project_path, gid)
-        require(r and r["verdict"] == "FAIL", "repair requires current confirmed FAIL: " + gid)
-    p["repair_round"] = p.get("repair_round", 0) + 1
-    indexes = [n for n, g in enumerate(p["groups"]) if g["id"] in gids]
-    affected = {p["groups"][j]["id"] for n in indexes for j in (n-1, n, n+1) if 0 <= j < len(p["groups"])}
-    for gid in gids:
-        g = group(p, gid)
-        g["version"] += 1
-        g["repair_round"] = p["repair_round"]
-    for r in p.get("reviews", []):
-        if r["group_id"] in affected or r["group_id"] == "__delivery__":
-            r["stale"] = True
-    p.setdefault("repairs", []).append({"round": p["repair_round"], "groups": gids, "reason": reason, "recheck": sorted(affected)})
-
-
-def split(p, gid, before):
-    g = group(p, gid)
-    require(g.get("repair_round") == p.get("repair_round", 0) and p.get("repair_round", 0) > 0, "split requires active repair round")
-    n = g["shot_ids"].index(before)
-    require(n > 0, "split cannot create empty group")
-    ids = {x["id"] for x in p["groups"]}
-    require(gid + "_a" not in ids and gid + "_b" not in ids, "split IDs already exist")
-    a, b = copy.deepcopy(g), copy.deepcopy(g)
-    a.update(id=gid + "_a", shot_ids=g["shot_ids"][:n])
-    b.update(id=gid + "_b", shot_ids=g["shot_ids"][n:])
-    # Parent wording covers a different interval; never submit it for both children.
-    for child in (a, b):
-        child.pop("video_prompt", None)
-    index = p["groups"].index(g)
-    p["groups"][index:index+1] = [a, b]
-    p["repairs"][-1].setdefault("splits", []).append({"from": gid, "to": [a["id"], b["id"]]})
-
-
-def restore(p, shot_id, reason):
-    s = next(s for s in p["shots"] if s["id"] == shot_id)
-    g = next(g for g in p["groups"] if shot_id in g["shot_ids"])
-    require(p.get("repair_round", 0) > 0 and g.get("repair_round") == p["repair_round"], "restore requires active repair for the affected group")
-    require(reason.strip(), "restoration reason required")
-    s["reference"].update(mode="anchor", locked=True, reason=reason)
-    p["repairs"][-1].setdefault("restored_references", []).append({"shot_id": shot_id, "reason": reason})
+def record_review(p, project_path, review):
+    from storyboard_inputs import enabled, record_review as record_images
+    require(enabled(p), 'Only paired storyboard images are supported')
+    return record_images(p, project_path, review)
 
 
 def render(p, project_path, out):
-    from storyboard import render as render_boards
-    return render_boards(p, project_path, out)
+    from storyboard import render_aggregation
+    return render_aggregation(p, project_path, out)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("validate", "prompt", "context", "render", "review", "repair", "split", "restore", "import-video"):
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    for name in ('validate', 'context', 'render', 'review'):
         q = sub.add_parser(name)
-        q.add_argument("project")
-        if name in ("prompt", "context", "split", "import-video"):
-            q.add_argument("group")
-        if name == "import-video": q.add_argument("video")
-        if name == "split": q.add_argument("before")
-        if name == "render": q.add_argument("output")
-        if name == "review": q.add_argument("review_file")
-        if name == "context": q.add_argument("--incremental-from", help="Reuse eligible records from the pre-remap evidence report")
-        if name == "repair":
-            q.add_argument("groups", nargs="+")
-            q.add_argument("--reason", required=True)
-        if name == "restore":
-            q.add_argument("shot")
-            q.add_argument("--reason", required=True)
+        q.add_argument('project')
+        if name == 'context': q.add_argument('group')
+        if name == 'render': q.add_argument('output')
+        if name == 'review': q.add_argument('review_file')
     args = ap.parse_args()
-    mutation = args.cmd in ("review", "repair", "split", "restore", "import-video")
-    with locked(args.project) if mutation else contextlib.nullcontext():
+    with locked(args.project) if args.cmd == 'review' else contextlib.nullcontext():
         p = read(args.project)
         result = validate(p, args.project)
-        if args.cmd == "prompt": result = prompt(p, args.group)
-        if args.cmd == "import-video": result = import_video(p, args.project, args.group, args.video)
-        if args.cmd == "context":
-            if args.incremental_from:
-                from incremental import resume_context
-                result = resume_context(p, args.project, args.group, args.incremental_from)
-            else:
-                result = video_context(p, args.project, args.group)
-        if args.cmd == "render": result = render(p, args.project, args.output)
-        if args.cmd == "review": result = record_review(p, args.project, read(args.review_file))
-        if args.cmd == "repair": repair(p, args.project, args.groups, args.reason)
-        if args.cmd == "split": split(p, args.group, args.before)
-        if args.cmd == "restore": restore(p, args.shot, args.reason)
-        if mutation:
-            validate(p, args.project)
+        if args.cmd == 'context': result = review_context(p, args.project, args.group)
+        if args.cmd == 'render': result = render(p, args.project, args.output)
+        if args.cmd == 'review':
+            result = record_review(p, args.project, read(args.review_file))
             save(args.project, p)
         print(json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result)
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except (ValueError, KeyError, StopIteration, OSError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+if __name__ == '__main__':
+    main()

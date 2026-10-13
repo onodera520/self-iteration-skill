@@ -1,4 +1,4 @@
-"""Validate imported-video asset evidence, not the truth of visual descriptions."""
+"""Validate same-shot original-image asset evidence and localized issues."""
 
 
 ASPECT_CHECK = {"wardrobe": "identity", "appearance": "identity", "prop": "props", "scene": "scene"}
@@ -17,9 +17,12 @@ def validate_asset_evidence(p, project_path, review, context):
     shots = {s["id"]: s for s in p["shots"] if s["id"] in review["coverage"]["shot_ids"]}
     rows = {s["shot_id"]: s for s in review["shot_reviews"]}
     evidence = review["evidence"]
+
+    def bound(e, row):
+        return e['sha256'] in row.get('evidence_sha256', [])
     for e in evidence:
         require(strings(e.get("visible_facts")) and e["visible_facts"] and text(e.get("interpretation")),
-                "frame needs neutral visible_facts and separate interpretation; observation alone is insufficient")
+                "original image needs neutral visible_facts and separate interpretation; observation alone is insufficient")
 
     comparisons = review.get("asset_comparisons")
     require(isinstance(comparisons, list), "group asset_comparisons required")
@@ -33,7 +36,6 @@ def validate_asset_evidence(p, project_path, review, context):
         expected_kind = "character" if aspect in ("wardrobe", "appearance") else aspect
         require(assets[aid]["kind"] == expected_kind, "comparison aspect must match asset kind")
         require((sid, aid, aspect) not in by_key, "one comparison per shot/asset/aspect")
-        require(rows[sid]["verdict"] != "absent", "absent shot cannot claim an asset comparison")
         decision = c.get("decision")
         require(decision in ("PASS", "FAIL", "uncertain"), "invalid asset decision")
         if aspect in ("wardrobe", "appearance"):
@@ -46,9 +48,10 @@ def validate_asset_evidence(p, project_path, review, context):
         for ref in refs:
             require(isinstance(ref, dict) and any(e["shot_id"] == sid and
                 resolve(project_path, e["path"]) == resolve(project_path, ref.get("path", "")) and
-                e["sha256"] == ref.get("sha256") and e["time"] == ref.get("time") and
-                e["time"] in rows[sid].get("evidence_times", []) for e in evidence),
-                "asset evidence must bind same-shot frame, hash and exact time")
+                e["sha256"] == ref.get("sha256") and
+                "time" not in ref and
+                bound(e, rows[sid]) for e in evidence),
+                "asset evidence must bind the same-shot original image and hash")
         for field in ("condition_factors", "stable_matches", "unobservable_features", "basis_shot_ids"):
             require(strings(c.get(field)), "asset comparison needs " + field)
         conflicts = c.get("stable_conflicts")
@@ -57,7 +60,7 @@ def validate_asset_evidence(p, project_path, review, context):
             "structural conflicts need feature, expected, observed and environment_exclusion")
         require(isinstance(c.get("followup"), str), "asset followup field required")
         if decision in ("PASS", "FAIL"):
-            require(refs and assets[aid]["sha256"] != "MISSING", "asset PASS/FAIL needs current asset and local timed evidence")
+            require(refs and assets[aid]["sha256"] != "MISSING", "asset PASS/FAIL needs current asset and local original-image evidence")
         if decision == "PASS":
             require(c["stable_matches"] and not conflicts and not c["unobservable_features"],
                     "asset PASS needs stable matches without conflicts or necessary invisible features")
@@ -70,8 +73,6 @@ def validate_asset_evidence(p, project_path, review, context):
 
     for sid, row in rows.items():
         require(text(row.get("identity_reason")), "per-shot identity_reason required")
-        if row["verdict"] == "absent":
-            continue
         decisions = [c["decision"] for c in comparisons if c["shot_id"] == sid and
                      ASPECT_CHECK[c["aspect"]] == "identity"]
         expected = "FAIL" if "FAIL" in decisions else "uncertain" if "uncertain" in decisions else "PASS"
@@ -79,8 +80,8 @@ def validate_asset_evidence(p, project_path, review, context):
         if expected == "PASS":
             characters = [assets[aid] for aid in shots[sid]["asset_ids"] if assets[aid]["kind"] == "character"]
             require(all(a["sha256"] != "MISSING" for a in characters), "identity PASS needs current asset")
-            require(not characters or any(e["shot_id"] == sid and e["time"] in row.get("evidence_times", []) for e in evidence),
-                    "identity PASS needs same-shot visible facts and timed evidence")
+            require(not characters or any(e["shot_id"] == sid and bound(e, row) for e in evidence),
+                    "identity PASS needs same-shot visible facts and original-image evidence")
         # Other asset aspects cannot hide a conflict under a different check.
         for check in ("props", "scene"):
             ds = [c["decision"] for c in comparisons if c["shot_id"] == sid and ASPECT_CHECK[c["aspect"]] == check]
@@ -107,8 +108,6 @@ def validate_asset_evidence(p, project_path, review, context):
             for aid in aids:
                 require(any(c["shot_id"] == sid and c["asset_id"] == aid for c in linked),
                         "multi-shot asset issue needs comparison evidence for every shot and asset")
-        require(all(issue["time_range"][0] <= ref["time"] <= issue["time_range"][1] for c in linked for ref in c["evidence_refs"]),
-                "asset issue time range must cover its comparison evidence")
     for c in comparisons:
         if c["decision"] == "FAIL":
             require(any(c["id"] in issue["asset_comparison_ids"] for issue in review["issues"]),

@@ -1,22 +1,18 @@
+param([switch]$ImagesOnly)
+
 $ErrorActionPreference = 'Stop'
 $env:PYTHONUTF8 = '1'
 $root = Split-Path $PSScriptRoot -Parent
 $python = if ($env:PYTHON) { $env:PYTHON } else { 'python' }
 
-if (-not $env:FFMPEG) {
-    $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
-    if ($ffmpeg) { $env:FFMPEG = $ffmpeg.Source }
+if ($ImagesOnly) {
+    & $python -m unittest discover -s $PSScriptRoot -p test_script_input.py -v
+    if ($LASTEXITCODE -ne 0) { throw 'Script input tests failed' }
+    & $python -m unittest discover -s $PSScriptRoot -p test_storyboard_images.py -v
+} else {
+    & $python -m unittest discover -s $PSScriptRoot -v
 }
-if (-not $env:FFPROBE) {
-    $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
-    if ($ffprobe) { $env:FFPROBE = $ffprobe.Source }
-}
-if (-not $env:FFMPEG -or -not $env:FFPROBE) {
-    throw 'FFmpeg and FFprobe must be available in PATH or supplied through FFMPEG and FFPROBE.'
-}
-
-& $python -m unittest discover -s $PSScriptRoot -v
-if ($LASTEXITCODE -ne 0) { throw 'Behavior or media tests failed' }
+if ($LASTEXITCODE -ne 0) { throw 'Current workflow tests failed' }
 
 $validator = Join-Path $env:USERPROFILE '.codex/skills/.system/skill-creator/scripts/quick_validate.py'
 if (Test-Path $validator) {

@@ -1,9 +1,6 @@
-"""Optional source-video prompts: immutable input, script-bound visual selections."""
-import argparse
+"""Deferred original prompts: immutable input and script-bound visual selections."""
 import copy
 import hashlib
-from pathlib import Path
-
 import previs as core
 import repair_prompt
 
@@ -13,20 +10,18 @@ def text_sha(text):
 
 
 def register(p, project, gid, text):
-    core.require(isinstance(text, str) and text.strip(), 'Source video prompt must be nonempty text')
-    record, path = core.current_video(p, project, core.group(p, gid))
-    core.require(record and path, 'Import the corresponding video before registering its prompt')
-    row = dict(video_sha256=core.sha(path), text=text, text_sha256=text_sha(text))
-    p.setdefault('source_video_prompts', {})[gid] = row
+    core.require(isinstance(text, str) and text.strip(), 'Original prompt must be nonempty text')
+    from storyboard_inputs import context
+    row = dict(source_fingerprint=context(p, project, gid)['source_fingerprint'],
+               text=text, text_sha256=text_sha(text))
+    p.setdefault('source_storyboard_prompts', {})[gid] = row
     return row
 
 
 def current(p, gid):
-    source = p.get('source_video_prompts', {}).get(gid)
-    if source is None:
-        return None
-    return dict(source=copy.deepcopy(source),
-                assessment=copy.deepcopy(p.get('repair_prompt_references', {}).get(gid)))
+    source = p.get('source_storyboard_prompts', {}).get(gid)
+    if source is None: return None
+    return dict(source=copy.deepcopy(source), assessment=copy.deepcopy(p.get('repair_prompt_references', {}).get(gid)))
 
 
 def validate(snapshot, binding, originals, shot_ids):
@@ -44,9 +39,11 @@ def validate(snapshot, binding, originals, shot_ids):
     raw = source.get('text')
     core.require(isinstance(raw, str) and raw.strip(), 'Original prompt text required')
     check(source.get('text_sha256') == text_sha(raw), 'text SHA256 mismatch')
-    check(source.get('video_sha256') == binding['video_sha256'], 'wrong or changed source video')
+    source_key = 'source_fingerprint'
+    check(source.get(source_key) == binding[source_key],
+          'wrong or changed source images')
     check(review.get('source_sha256') == text_sha(raw), 'stale prompt assessment')
-    check(review.get('video_sha256') == binding['video_sha256'], 'assessment video mismatch')
+    check(review.get(source_key) == binding[source_key], 'assessment source mismatch')
     check(review.get('script_fingerprint') == binding['script_fingerprint'], 'stale script assessment')
     check(review.get('preserves_story') is True, 'preserves_story=true required')
     for field in ('compatibility_reason',):
@@ -87,21 +84,3 @@ def validate(snapshot, binding, originals, shot_ids):
         check(isinstance(reason, str) and bool(reason.strip()), f'excluded[{i}].reason required')
     repair_prompt.finish(errors)
     return guidance
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('project')
-    ap.add_argument('group')
-    ap.add_argument('prompt_file', help='UTF-8 TXT/MD containing only the supplied original video prompt')
-    args = ap.parse_args()
-    text = Path(args.prompt_file).read_bytes().decode('utf-8-sig')
-    with core.locked(args.project):
-        p = core.read(args.project)
-        register(p, args.project, args.group, text)
-        core.save(args.project, p)
-    print('Original video prompt registered; existing visual reviews remain unchanged.')
-
-
-if __name__ == '__main__':
-    main()
