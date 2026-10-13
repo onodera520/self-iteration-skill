@@ -60,7 +60,9 @@ class CompilationTests(unittest.TestCase):
         delivered = repair_export.render_prompt(p, request)
         self.assertEqual(source, before)
         self.assertEqual([b['text'] for b in request['blocks']], [b['text'] for b in source['blocks']])
-        self.assertIn('仅约束终态目标时刻', delivered)
+        self.assertIn('甲把钥匙递给乙，乙接住钥匙；终态乙持有钥匙，甲已松手。', delivered)
+        self.assertNotIn('以下必须／不得出现仅约束', delivered)
+        self.assertEqual(request['blocks'][0]['keyframe_target'], source['blocks'][0]['keyframe_target'])
         self.assertIn('【本镜必须出现】乙持有钥匙', delivered)
         self.assertIn('【本镜不得出现】甲仍持有钥匙', delivered)
         self.assertNotIn('接收者为乙。', delivered)
@@ -72,13 +74,17 @@ class CompilationTests(unittest.TestCase):
         self.assertEqual(request['prompt_plan'], plan)
 
     def test_all_keyframe_phases_and_static_counterexample(self):
-        for phase, chinese in [('entry', '起态'), ('action', '动作中'), ('exit', '终态')]:
+        for phase in ('entry', 'action', 'exit'):
             p, source, plan = fixture()
             source['blocks'][0]['keyframe_target']['phase'] = phase
             plan['source_fingerprint'] = core.digest(source)
             request = quality.compile_request(plan, source, p)
             delivered = repair_export.render_prompt(p, request)
-            self.assertIn(f'仅约束{chinese}目标时刻', delivered)
+            self.assertNotIn('以下必须／不得出现仅约束', delivered)
+            self.assertEqual(request['blocks'][0]['keyframe_target']['phase'], phase)
+            self.assertIn(plan['shots'][0]['content'], delivered)
+            self.assertIn('【本镜必须出现】乙持有钥匙', delivered)
+            self.assertIn('【本镜不得出现】甲仍持有钥匙', delivered)
             # The empty-room shot must not acquire a person, handoff or invented phase.
             self.assertEqual(request['blocks'][2]['compiled_content'], '空房间里窗帘轻动。')
 

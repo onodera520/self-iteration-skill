@@ -80,9 +80,11 @@ class PromptExportTests(fixtures.Base):
         middle = text.split('镜头2,')[1].split('镜头3,')[0]
         for expected in (body, '交接结果为乙持有钥匙', '冷光照亮门框',
                          'key.holder 由 甲 变为 乙', '终态画面：乙持钥匙',
-                         '仅约束该时刻', '【本镜必须出现】乙持钥匙',
+                         '【本镜必须出现】乙持钥匙',
                          '【本镜不得出现】甲持钥匙'):
             self.assertIn(expected, middle)
+        self.assertNotIn('以下必须／不得出现仅约束', text)
+        self.assertEqual(block['keyframe_target'], {'phase': 'exit', 'description': '乙持钥匙'})
         self.assertNotIn('交接结果为乙持有钥匙', text.split('镜头2,')[0])
         self.assertNotIn('照片级写实', text)
         self.assertIn('SIMULATED asset style', text)

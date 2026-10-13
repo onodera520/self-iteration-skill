@@ -16,7 +16,7 @@ def render_prompt(p, request):
     """Render the user's plain prompt layout from a validated internal request.
 
     Version 6 uses a source-bound, audited body. Older versions retain their
-    exact assembly. Requirements keep their original keyframe phase scope.
+    stored contributions and target phase, without extra scope commentary.
     """
     assets = {a['id']: a for a in (request['asset_descriptions'] if request.get('prompt_version') == 6 else p['assets'])}
     adaptations = request.get('visual_adaptations', {})
@@ -39,12 +39,9 @@ def render_prompt(p, request):
             body.extend(block.get('input_prompt_guidance', []))
             body.extend(block.get('critical_changes', []))
         target = block.get('keyframe_target')
-        if target:
+        if target and not compiled:
             phase = {'entry': '起态', 'action': '动作中', 'exit': '终态'}[target['phase']]
-            if compiled:
-                body.append(f'以下必须／不得出现仅约束{phase}目标时刻，完整动作仍按正文先后呈现')
-            else:
-                body.append(f'{phase}画面：{target["description"]}；以下必须／不得出现仅约束该时刻，完整动作仍按正文先后呈现')
+            body.append(f'{phase}画面：{target["description"]}')
         line = (f'镜头{i},【时长】1s。【镜头设计】{_line(block["design"]).rstrip("。")}。'
                 f'【镜头内容】{_sentences(body)}')
         for name, label in (('must_have', '本镜必须出现'), ('must_not_have', '本镜不得出现')):
