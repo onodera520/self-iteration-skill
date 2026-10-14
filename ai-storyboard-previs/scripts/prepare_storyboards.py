@@ -9,12 +9,35 @@ import previs as core
 import storyboard_inputs as images
 import storyboard_overviews as overviews
 import agent_context
-import planner
-import repair_cycle as repair
 from evidence_runtime import evidence_operation
-from finish_review import intact, validate_delivery
 from review_timing import utc_now
-from validation import Report, text, shot_path
+from validation import Report, ValidationError, text, shot_path
+
+
+CHECK_GROUPS = dict(content=('identity', 'scene', 'props'),
+                    state=('key_state', 'continuity'), reference=('composition', 'cleanliness'))
+
+
+def delivery_available(path):
+    """Existing empty directories are safe; never remove or reuse delivery content."""
+    return not path.exists() or (path.is_dir() and not any(path.iterdir()))
+
+
+def expand_check_groups(row):
+    """Expand explicit grouped judgments, never infer a visual judgment from a verdict."""
+    groups, exceptions = row.get('check_groups'), row.get('check_exceptions', {})
+    core.require(isinstance(groups, dict) and set(groups) == set(CHECK_GROUPS)
+                 and all(v in ('PASS', 'FAIL', 'uncertain') for v in groups.values()), '须填写三组图片检查')
+    names = {name for members in CHECK_GROUPS.values() for name in members}
+    core.require(isinstance(exceptions, dict) and set(exceptions) <= names
+                 and all(v in ('FAIL', 'uncertain') for v in exceptions.values()), '异常须定位到具体检查项')
+    checks = dict.fromkeys(names, 'PASS')
+    checks.update(exceptions)
+    for key, members in CHECK_GROUPS.items():
+        values = [checks[name] for name in members]
+        actual = 'FAIL' if 'FAIL' in values else 'uncertain' if 'uncertain' in values else 'PASS'
+        core.require(groups[key] == actual, '三组检查与具体异常不一致：' + key)
+    return checks
 
 
 def shared_requirements(p):
@@ -89,8 +112,8 @@ def project_input(data):
             k = r.get('keyframe')
             report.check(isinstance(k, dict) and k.get('phase') in ('entry', 'action', 'exit'),
                          where + '.requirements.keyframe.phase', '阶段须为 entry/action/exit，不自动猜测')
-        facts = s.get('facts')
-        if report.check(isinstance(facts, list) and bool(facts), where + '.facts', '须保留有来源的必要事实'):
+        facts = s.get('facts', [])
+        if report.check(isinstance(facts, list), where + '.facts', '可选状态事实须为数组'):
             for j, f in enumerate(facts):
                 report.check(isinstance(f, dict) and f.get('phase') in ('static', 'before', 'after'),
                              f'{where}.facts[{j}].phase', '事实阶段须为 static/before/after，不能填写 current')
@@ -114,7 +137,9 @@ def project_input(data):
         r.setdefault('must_not_have', [])
         if isinstance(r.get('keyframe'), dict):
             r['keyframe'].setdefault('state', {})
-        core.require(isinstance(s.get('facts'), list) and s['facts'], '每镜须保留有来源的必要 facts，不能自动猜测')
+        # Visual evidence belongs in the worklist. Planner facts are only needed
+        # for explicit state modelling/omission, never synthesized from shot prose.
+        s.setdefault('facts', [])
         core.require(isinstance(s.get('intent'), dict), '每镜须明确 intent 剧情关键性标记')
         s.setdefault('state_changes', [])
         s.setdefault('reference', dict(mode='anchor', path=None, role='representative',
@@ -125,7 +150,8 @@ def project_input(data):
     p.update(storyboard_images=supplied, groups=[dict(id='G01', shot_ids=[s.get('id') for s in p['shots']], version=1)])
     p.setdefault('config', {})
     core.require(isinstance(p['config'], dict), '精简输入的 config 须为对象')
-    p['config'].update(workflow='storyboard_images', video_input_mode='assets', delivery_mode='storyboard_images')
+    p['config'].update(workflow='storyboard_images', video_input_mode='assets', delivery_mode='storyboard_images',
+                       storyboard_review_policy='single_pass')
     for key, value in dict(tasks={}, reviews=[], repairs=[], repair_round=0, delivery=None).items():
         p.setdefault(key, value)
     return p
@@ -142,12 +168,20 @@ def worklist(ctx):
         item = {k: v for k, v in row.items() if k in ('shot_id', 'verdict', 'reference_phase', 'checks')}
         item['reference'] = {k: v for k, v in ref.items() if k in ('decision', 'derivable', 'basis_shot_ids')}
         item['observation'] = dict(visible_facts=[])
+        if images.single_pass(ctx):
+            item.pop('checks')
+            item.update(check_groups=dict.fromkeys(CHECK_GROUPS, 'uncertain'), check_exceptions={}, match_level=None)
         result['shots'].append(item)
+    if images.single_pass(ctx):
+        result['worklist_version'] = 3
     return result
 
 
 def expand(ctx, data):
-    core.require(data.get('worklist_version') in (1, 2) and data.get('context_fingerprint') == ctx['context_fingerprint']
+    if data.get('worklist_version') == 4:
+        from storyboard_conclusions import expand as expand_conclusions
+        data = expand_conclusions(ctx, data)
+    core.require(data.get('worklist_version') in (1, 2, 3) and data.get('context_fingerprint') == ctx['context_fingerprint']
                  and data.get('group_id') == ctx['group_id'], '审查依据已变化，请重新 prepare 并核验工作表')
     overviews.validate(ctx, data.get('overview_manifest'))
     full = images.draft(ctx)
@@ -158,10 +192,16 @@ def expand(ctx, data):
     full['coverage']['limitations'] = copy.deepcopy(data['limitations'])
     for row, target, ref, evidence in zip(data['shots'], full['shot_reviews'], full['reference_assessments'], full['evidence']):
         row = copy.deepcopy(row)
-        if data['worklist_version'] == 2:
+        if data['worklist_version'] == 3:
+            core.require(images.single_pass(ctx), '三组工作单须使用一次看图策略')
+            row['checks'] = expand_check_groups(row)
+            if row.get('verdict') == 'PASS':
+                core.require(type(row.get('match_level')) is int and 0 <= row['match_level'] <= 3,
+                             '通过须记录同一次观察采用的匹配等级 0–3')
+        if data['worklist_version'] in (2, 3):
             core.require(isinstance(row.get('checks'), dict) and set(row['checks']) == set(target['checks'])
                          and 'verdict' in row and 'reference_phase' in row,
-                         '每镜须显式填写七项检查、结论和参考阶段')
+                         '每镜须显式填写检查、结论和参考阶段')
             reference = row.get('reference')
             core.require(isinstance(reference, dict) and all(key in reference for key in
                          ('decision', 'derivable', 'basis_shot_ids')), '每镜须填写参考图取舍与依据镜号')
@@ -185,14 +225,14 @@ def expand(ctx, data):
                 row['reference'].setdefault('reason', '保留原图')
             elif row['reference'].get('decision') == 'pending':
                 row['reference'].setdefault('reason', row.get('followup') or row['reason'])
-        for key in ('verdict', 'reason', 'identity_reason', 'reference_phase', 'phase_reason', 'checks', 'followup', 'identity_scope'):
+        for key in ('verdict', 'reason', 'identity_reason', 'reference_phase', 'phase_reason', 'checks', 'followup', 'identity_scope', 'match_level'):
             if key in row:
                 target[key] = copy.deepcopy(row[key])
         for key in ('decision', 'derivable', 'basis_shot_ids', 'reason'):
             ref[key] = copy.deepcopy(row['reference'][key])
         for key in ('observation', 'visible_facts', 'interpretation'):
             evidence[key] = copy.deepcopy(row['observation'][key])
-    if data['worklist_version'] == 2:
+    if data['worklist_version'] in (2, 3):
         bound = {s['shot_id']: s['image'] for s in ctx['shots']}
         assets = {a['id']: a for a in ctx['assets']}
         for comparison in full['asset_comparisons']:
@@ -212,7 +252,9 @@ def expand(ctx, data):
     return full
 
 
-def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *, original_prompt_file=None, output=None):
+def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *, original_prompt_file=None,
+            output=None, reuse_overviews=None, concise=False):
+    import repair_cycle as repair
     project, run_dir = Path(project).resolve(), Path(run_dir).resolve()
     report = Report()
     report.check(project.parent.is_dir(), 'project', '项目父目录须已存在')
@@ -221,17 +263,35 @@ def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *
         output = Path(output).resolve()
         report.check(not project.is_relative_to(output) and not run_dir.is_relative_to(output)
                      and not output.is_relative_to(run_dir), 'output', '内部记录、交付和项目应使用独立目录')
-        report.check(not output.exists(), 'output', '交付须使用新目录，不覆盖已有交付')
+        report.check(delivery_available(output), 'output', '交付须使用新目录或空目录，不覆盖已有交付')
+    candidate = None
+    if input_data is not None:
+        can_build = report.check(not project.exists() and supplied is None, 'input',
+                                '精简输入仅用于新项目；不要覆盖已有项目或另传 --images')
+        if can_build:
+            try:
+                candidate = project_input(input_data)
+                # Collect independent field errors even when layout is invalid.
+                # On the normal path the locked validation below runs just once.
+                if report.errors or report.blocked:
+                    core.validate(candidate, project)
+            except ValidationError as error:
+                report.errors.extend(row for row in error.errors if row not in report.errors)
+                report.blocked.extend(row for row in error.blocked if row not in report.blocked)
+            except ValueError as error:
+                report.check(False, 'input', str(error))
     report.finish()
     with core.locked(project):
         if input_data is not None:
             core.require(not project.exists() and supplied is None, '精简输入仅用于新项目；不要覆盖已有项目或另传 --images')
-            p = project_input(input_data)
+            p = candidate
         else:
             p = core.read(project)
         core.require(images.enabled(p) or not (p.get('imported_videos') or p.get('tasks') or p.get('reviews')),
                      '已有视频项目请保留原样；为分镜图复制脚本和原资产到新项目')
         p['config'].update(workflow='storyboard_images', video_input_mode='assets')
+        if not p.get('reviews'):
+            p['config'].setdefault('storyboard_review_policy', 'single_pass')
         p['config'].pop('video_source', None)
         if supplied is not None:
             core.require(isinstance(supplied, list), '输入问题：需要按顺序排列的图片路径或镜号对应项列表')
@@ -261,8 +321,17 @@ def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *
                 p.setdefault('deferred_storyboard_prompts', {})[gid] = dict(text=original_prompt)
             ctx = images.context(p, project, gid)
             run_dir.mkdir(parents=True)
-            ctx['review_overviews'] = overviews.build(ctx, run_dir, project)
-            draft = worklist(ctx)
+            ctx['review_overviews'] = overviews.build(ctx, run_dir, project, initial=reuse_overviews,
+                                                     source_script=p['source_script'])
+            if concise:
+                from storyboard_conclusions import draft as conclusions_draft
+                draft = conclusions_draft(ctx)
+            else:
+                draft = worklist(ctx)
+            first_facts = overviews.initial_observations(ctx, reuse_overviews, p['source_script'])
+            for row in draft['shots']:
+                if row['shot_id'] in first_facts:
+                    row['observation']['visible_facts'] = first_facts[row['shot_id']]
         core.save(run_dir / 'CONTEXT.json', ctx)
         core.save(run_dir / 'WORKLIST.json', draft)
         core.save(run_dir / 'REVIEW.view.json', agent_context.reading_view(ctx))
@@ -273,7 +342,9 @@ def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *
                   next_action='实际看图并及时保存 WORKLIST；压缩后先 resume 校验来源，不重新 prepare。'))
         core.save(project, p)
     return dict(group_id=gid, context=str(run_dir / 'CONTEXT.json'), worklist=str(run_dir / 'WORKLIST.json'),
+                worklist_version=draft['worklist_version'],
                 review_view=str(run_dir / 'REVIEW.view.json'), run_receipt=str(run_dir / 'RUN.json'),
+                reused_observation_shot_ids=list(first_facts),
                 review_overviews=ctx['review_overviews'])
 
 
@@ -285,7 +356,7 @@ def resume(project, run_dir, shot_ids=None, page=None):
         core.require(images.enabled(p), '恢复入口只用于已准备的分镜图项目')
         data = core.read(run_dir / 'WORKLIST.json')
         stored = core.read(run_dir / 'CONTEXT.json')
-        core.require(isinstance(data, dict) and data.get('worklist_version') in (1, 2)
+        core.require(isinstance(data, dict) and data.get('worklist_version') in (1, 2, 3, 4)
                      and isinstance(data.get('group_id'), str) and isinstance(stored, dict),
                      '工作单版本、批次或上下文无效')
         ctx = images.context(p, project, data['group_id'])
@@ -312,9 +383,12 @@ def resume(project, run_dir, shot_ids=None, page=None):
         result = dict(group_id=ctx['group_id'], context_fingerprint=ctx['context_fingerprint'],
                       worklist=str(run_dir / 'WORKLIST.json'),
                       review_view=str(view_file if view_file.exists() else run_dir / 'CONTEXT.json'),
-                      progress=agent_context.progress(data),
+                      progress=(agent_context.progress(data, ctx) if data['worklist_version'] == 4
+                                else agent_context.progress(data)),
                       next_action='按保存记录继续实际审查；--page 页码读取一批，--shots 镜号定位本镜和相邻镜。'
                                   'complete 仍校验整批，不凭恢复状态批准。')
+        if images.single_pass(ctx):
+            result['next_action'] = '复用已保存判断，只继续未记录或不完整字段；待核查直接交付，不重开已看图片。'
         if shot_ids is not None or page is not None:
             result['view'] = (agent_context.batch_view(ctx, page) if page is not None
                               else agent_context.reading_view(ctx, shot_ids))
@@ -337,11 +411,25 @@ def resume(project, run_dir, shot_ids=None, page=None):
                                      and (r.get('verdict') == 'uncertain'
                                           or (isinstance(r.get('checks'), dict)
                                               and 'uncertain' in r['checks'].values()))]
+            if images.single_pass(ctx):
+                result['unresolved_items'] = []
+                for row in rows:
+                    if row['shot_id'] not in requested or row['shot_id'] not in recorded or row.get('verdict') != 'uncertain':
+                        continue
+                    reason = ('；'.join(item['reason'] for item in row['unresolved'])
+                              if data['worklist_version'] == 4 else row.get('reason', ''))
+                    result['unresolved_items'].append(dict(shot_id=row['shot_id'], reason=reason,
+                        followup=reason if data['worklist_version'] == 4 else row.get('followup', '')))
+                result['detail_queue'] = []
+                result['view']['images_to_open'] = [item for item in result['view'].get('images_to_open', [])
+                    if not set(item.get('shot_ids', [])) <= recorded]
+                result['next_action'] = '复用已保存判断，只继续未记录镜头；待核查保留后直接 complete，不重开已看图片。'
     return result
 
 
 def load_original_prompt(p, project, gid):
     """Read/register optional generation guidance only after a current threshold trigger."""
+    import repair_cycle as repair
     core.require(repair.current_decision(p, project, gid)['triggered'], '未达阈值，不读取原提示词')
     pending = p.get('deferred_storyboard_prompts', {}).get(gid)
     if pending is None:
@@ -355,6 +443,9 @@ def load_original_prompt(p, project, gid):
 
 
 def complete(project, worklist_file, output, run_dir, profile=None, target_aspect=None):
+    import planner
+    import repair_cycle as repair
+    from finish_review import intact, validate_delivery
     project, output, run_dir = (Path(v).resolve() for v in (project, output, run_dir))
     core.require(not run_dir.exists() and not project.is_relative_to(run_dir)
                  and not run_dir.is_relative_to(output) and not output.is_relative_to(run_dir)
@@ -428,11 +519,18 @@ def main():
     raw.add_argument('script')
     raw.add_argument('--images', required=True, help='Ordered JSON paths or shot_id/path rows; relative to this JSON file')
     raw.add_argument('--output', required=True, help='New internal INPUT.json; parent directory must exist')
+    first = sub.add_parser('overview', help='Render raw-script first-look sheets before narrative preparation')
+    first.add_argument('script')
+    first.add_argument('--images', required=True, help='Ordered JSON paths or shot_id/path rows; relative to this JSON file')
+    first.add_argument('--output', required=True, help='New internal first-look directory; never overwrite INPUT')
+    first.add_argument('--delivery', help='Planned public case directory; keep first-look records outside it')
     prep = sub.add_parser('prepare')
     prep.add_argument('project')
     prep.add_argument('--images', help='JSON list of paths or shot_id/path objects, relative to the project')
     prep.add_argument('--input', help='Compact input JSON for a new project; image paths remain relative to PROJECT.json')
     prep.add_argument('--run-dir', required=True)
+    prep.add_argument('--reuse-overviews', help='First-look directory or INITIAL_OVERVIEWS.json; verify before reuse')
+    prep.add_argument('--concise', action='store_true', help='Write each conclusion/error once; expand review and repair records automatically')
     prep.add_argument('--output', help='Planned new delivery directory; check separation before preparing')
     prep.add_argument('--original-prompt', help='Optional UTF-8 prompt file; read only after the repair threshold triggers')
     recovery = sub.add_parser('resume', help='Check saved progress; read selected shots and their neighbours')
@@ -444,17 +542,27 @@ def main():
     done.add_argument('project'); done.add_argument('worklist')
     done.add_argument('--output', required=True); done.add_argument('--run-dir', required=True)
     done.add_argument('--profile'); done.add_argument('--target-aspect')
-    for parser in (raw, prep, recovery, done):
+    for parser in (raw, first, prep, recovery, done):
         parser.add_argument('--detailed', action='store_true', help='Print full tool result; normally keep evidence on disk')
     args = ap.parse_args()
     try:
         if args.action == 'extract':
             from script_input import extract
-            result = extract(args.script, core.read(args.images), args.output, image_base=Path(args.images).resolve().parent)
+            result = extract(args.script, core.read(args.images), args.output,
+                             image_base=Path(args.images).resolve().parent)
+        elif args.action == 'overview':
+            if args.delivery:
+                public, internal = (Path(v).resolve() for v in (args.delivery, args.output))
+                core.require(not internal.is_relative_to(public) and not public.is_relative_to(internal),
+                             '首看内部目录与交付目录应使用独立目录，不在 case 交付内创建内部文件夹')
+                core.require(delivery_available(public), '交付须使用新目录或空目录，不覆盖已有交付')
+            result = overviews.overview(args.script, core.read(args.images), args.output,
+                                       image_base=Path(args.images).resolve().parent)
         elif args.action == 'prepare':
             result = prepare(args.project, core.read(args.images) if args.images else None, args.run_dir,
                              input_data=core.read(args.input) if args.input else None,
-                             original_prompt_file=args.original_prompt, output=args.output)
+                             original_prompt_file=args.original_prompt, output=args.output,
+                             reuse_overviews=args.reuse_overviews, concise=args.concise)
         elif args.action == 'resume':
             result = resume(args.project, args.run_dir, args.shots, args.page)
         else:

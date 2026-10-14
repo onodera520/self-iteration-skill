@@ -467,6 +467,7 @@
   ],
   "config": {
     "workflow": "storyboard_images",
+    "storyboard_review_policy": "single_pass",
     "aspect_ratio": "16:9",
     "max_repair_rounds": 3,
     "max_submissions": 1,

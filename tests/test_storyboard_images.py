@@ -24,7 +24,8 @@ class StoryboardImagesTests(fixtures.Base):
 
     def setUp(self):
         fixtures.Base.setUp(self)
-        self.p['config'].update(workflow='storyboard_images')
+        # Historical fixtures keep their receipts; new defaults have separate tests.
+        self.p['config'].update(workflow='storyboard_images', storyboard_review_policy='legacy')
         self.p['storyboard_images'] = [dict(shot_id=s['id'], path=str(self.png('board-'+s['id'], (20*i, 70, 90))))
                                        for i, s in enumerate(self.p['shots'])]
         self.p['repair_asset_style'] = dict(preserves_story=True, assets=[dict(
@@ -169,7 +170,7 @@ class StoryboardImagesTests(fixtures.Base):
 
     def test_compact_input_cannot_invent_missing_requirements_or_image(self):
         data = self.compact_input()
-        for field in ('phase', 'provenance', 'image', 'duration_source', 'facts', 'intent'):
+        for field in ('phase', 'provenance', 'image', 'duration_source', 'intent'):
             bad = copy.deepcopy(data)
             if field == 'phase':
                 del bad['shots'][0]['requirements']['keyframe']['phase']
@@ -222,6 +223,54 @@ class StoryboardImagesTests(fixtures.Base):
         self.assertTrue((root/'prep/WORKLIST.json').exists())
         self.assertFalse((root/'case').exists())
 
+    def test_empty_delivery_is_accepted_without_removal(self):
+        root = self.path.parent
+        output = root / 'empty-case'
+        output.mkdir()
+        with patch.object(Path, 'rmdir', side_effect=AssertionError('Do not delete the user directory')):
+            batch.prepare(root/'new.json', None, root/'prep', input_data=self.compact_input(), output=output)
+        self.assertTrue(output.is_dir())
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_delivery_conflict_and_input_errors_are_reported_together(self):
+        root = self.path.parent
+        output = root / 'existing-case'
+        output.mkdir()
+        (output / 'original.md').write_bytes(b'frozen')
+        data = self.compact_input()
+        data['shots'][0]['requirements']['keyframe']['phase'] = 'current'
+        data['shots'][1]['facts'][0]['phase'] = 'current'
+        with patch.object(images, 'inputs', side_effect=AssertionError('No decode on invalid input')), \
+                self.assertRaises(ValueError) as caught:
+            batch.prepare(root/'new.json', None, root/'prep', input_data=data, output=output)
+        for field in ('output', 'shots[S01].requirements.keyframe.phase', 'shots[S02].facts[0].phase'):
+            self.assertIn(field, str(caught.exception))
+        self.assertFalse((root / 'new.json').exists())
+        self.assertFalse((root / 'prep').exists())
+        self.assertEqual((output / 'original.md').read_bytes(), b'frozen')
+
+    def test_state_conflicts_are_rejected_before_review_without_omission_metadata(self):
+        data = self.compact_input()
+        for i, shot in enumerate(data['shots']):
+            shot.pop('omission_assessment', None)
+            shot['facts'] = [dict(entity='key', attribute='story_state', value='different script paragraph ' + str(i),
+                                 status='known', phase='static', critical=False,
+                                 source=dict(kind='script', ref=shot['script']))]
+            shot['state_changes'] = []
+        root = self.path.parent
+        with patch.object(images, 'inputs', side_effect=AssertionError('No decode on contradictory state')), \
+                self.assertRaisesRegex(ValueError, 'state baseline conflict'):
+            batch.prepare(root/'new.json', None, root/'prep', input_data=data)
+        self.assertFalse((root / 'new.json').exists())
+        self.assertFalse((root / 'prep').exists())
+
+    def test_legacy_planning_still_requires_nonempty_sourced_facts(self):
+        p = copy.deepcopy(self.p)
+        p['config'].pop('workflow')
+        p['shots'][0]['facts'] = []
+        with self.assertRaisesRegex(ValueError, 'sourced facts required'):
+            planner.validate_facts(p)
+
     def test_compact_template_cli_keeps_handoff_states_and_order(self):
         data = core.read(fixtures.ROOT / 'ai-storyboard-previs/assets/storyboard-input.json')
         for asset in data['assets']:
@@ -246,7 +295,11 @@ class StoryboardImagesTests(fixtures.Base):
         work['grouping_checked'] = True
         for row, shot in zip(work['shots'], data['shots']):
             row.update(verdict='PASS', reference_phase=shot['requirements']['keyframe']['phase'])
-            row['checks'] = dict.fromkeys(row['checks'], 'PASS')
+            if work['worklist_version'] == 3:
+                row['check_groups'] = dict.fromkeys(row['check_groups'], 'PASS')
+                row['match_level'] = 0
+            else:
+                row['checks'] = dict.fromkeys(row['checks'], 'PASS')
             row['reference'].update(decision='anchor', derivable=False, basis_shot_ids=[])
             row['observation']['visible_facts'] = ['SIMULATED：' + shot['requirements']['keyframe']['description']]
         workfile = self.path.parent/'template-prep/WORKLIST.json'

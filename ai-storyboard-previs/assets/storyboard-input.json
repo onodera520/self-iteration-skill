@@ -1,6 +1,6 @@
 {
   "input_version": 1,
-  "title": "精简输入示例：钥匙交接",
+  "title": "显式状态建模示例：钥匙交接",
   "source_script": "S01 门厅全景，黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。\nS02 中景，男孩接住钥匙，女孩松手。",
   "assets": [
     {"id": "girl", "kind": "character", "description": "黄外套女孩", "path": "assets/girl.png"},

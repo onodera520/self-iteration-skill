@@ -89,27 +89,44 @@ def batch_view(ctx, page_number):
     view['boundary_neighbor_shot_ids'] = [s['shot_id'] for s in view['shots']
                                          if s['shot_id'] not in page['shot_ids']]
     view['images_to_open'] = [dict(role='storyboards', path=page['path'], shot_ids=page['shot_ids'])]
-    sheets = ctx['review_overviews'].get('asset_sheets', [])
+    single = ctx.get('review_scope', {}).get('view_policy') == 'single_pass'
+    sheets = [] if single else ctx['review_overviews'].get('asset_sheets', [])
     view['images_to_open'].extend(dict(role='assets', path=sheet['path'],
                                       asset_ids=sheet['asset_ids'], visual_labels=sheet['visual_labels'])
                                   for sheet in sheets if sheet['path'] in page.get('asset_sheet_paths', []))
     # The next page reviews the next boundary. Only its preceding original is needed here.
     before = next((s for s in view['shots'] if s['shot_id'] not in page['shot_ids']), None)
-    if before and before['shot_id'] == view['shots'][0]['shot_id']:
+    if not single and before and before['shot_id'] == view['shots'][0]['shot_id']:
         view['images_to_open'].append(dict(role='previous_boundary', path=before['image']['path'],
                                            shot_ids=[before['shot_id']]))
     view['batch_rule'] = ('本页镜号逐镜判断；相邻镜号只作连续性背景，不代表已审查。'
                           '同一批已看清且未变化的原资产可复用；每张分镜的实际可见事实仍须单独记录。'
                           '总览不清的关键细节集中打开原图；不能由其他图片推定本图通过。')
+    if single:
+        view['batch_rule'] = ('每张分镜只看一次，三组检查和三级放宽在同一次观察中完成。'
+            '首看已保存且来源未变的可见事实直接复用，不再次打开本页；未看过的页只显示一次。'
+            '不默认显示或拼接原资产；跨页连续性使用 saved_rows 中相邻镜的可见事实。'
+            '核心矛盾直接 FAIL；关键细节看不清记 uncertain，写明疑点后交付，不放大或排队复查。'
+            '三级均须满足全部必要剧情元素，不以多数元素相似抵消关键矛盾，不重新选帧。')
     return view
 
 
-def progress(data):
+def progress(data, ctx=None):
     """Describe saved records only; never certify them or infer PASS."""
     recorded, needs_recording, uncertain, incomplete = [], [], [], []
     check_keys = {'identity', 'scene', 'props', 'composition', 'key_state', 'continuity', 'cleanliness'}
     for row in data['shots']:
         sid = row['shot_id']
+        concise_valid = True
+        if data.get('worklist_version') == 4:
+            from storyboard_conclusions import row_records
+            shot = next((s for s in (ctx or {}).get('shots', []) if s['shot_id'] == sid), None)
+            try:
+                if shot is None:
+                    raise ValueError('Current context required for concise progress')
+                row, _, _, _ = row_records(shot, row)
+            except ValueError:
+                concise_valid = False
         observation = row.get('observation')
         facts = observation.get('visible_facts') if isinstance(observation, dict) else None
         has_facts = isinstance(facts, list) and bool(facts) and all(isinstance(f, str) and f.strip() for f in facts)
@@ -117,8 +134,14 @@ def progress(data):
         if row.get('verdict') == 'uncertain':
             uncertain.append(sid)
         checks = row.get('checks', {})
+        if data.get('worklist_version') in (3, 4):
+            from prepare_storyboards import expand_check_groups
+            try:
+                checks = expand_check_groups(row)
+            except ValueError:
+                checks = {}
         ref = row.get('reference', {})
-        fields_present = (has_facts and isinstance(checks, dict) and set(checks) == check_keys
+        fields_present = (concise_valid and has_facts and isinstance(checks, dict) and set(checks) == check_keys
                           and all(v in ('PASS', 'FAIL', 'uncertain') for v in checks.values())
                           and row.get('verdict') in ('PASS', 'FAIL', 'uncertain')
                           and row.get('reference_phase') in ('entry', 'action', 'exit', 'unknown')
@@ -144,6 +167,13 @@ def cli_summary(action, result, run_dir=None):
                                      for page in result['review_overviews']['pages']]
         if result['review_overviews'].get('review_batches'):
             summary['review_batches'] = result['review_overviews']['review_batches']
+        if result.get('reused_observation_shot_ids'):
+            summary['reused_observation_shot_ids'] = result['reused_observation_shot_ids']
+            summary['view_rule'] = '这些镜头复用首看记录，不再次打开图片；仍须根据对应脚本填写明确结论。'
+        if 'initial_reuse' in result['review_overviews']:
+            summary['initial_reuse'] = result['review_overviews']['initial_reuse']
+        if result.get('worklist_version') == 4:
+            summary['writing_rule'] = '简短结论工作单：每镜判断覆盖三组；错误只写 findings 一次，疑点只写 unresolved；其余记录由 complete 展开。'
         return summary
     if action != 'complete':
         return result

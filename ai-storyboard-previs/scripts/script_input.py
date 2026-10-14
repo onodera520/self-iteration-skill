@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import previs as core
+from evidence_runtime import evidence_operation
 from validation import Report, text
 
 HEADER = re.compile(r'(?m)^[ \t]*镜头[ \t]*(\d+)(?=[ \t,，。:：;；\r\n【]|$)')
@@ -47,17 +48,33 @@ def parse(source, source_name='脚本'):
 
 def extract(script_file, supplied, output, *, image_base=None):
     """Write a mechanical INPUT draft; explicit narrative judgments are filled later."""
-    script_file, output = Path(script_file).resolve(), Path(output).resolve()
-    core.require(output.parent.is_dir(), 'INPUT 父目录须已存在；请使用独立的内部目录')
-    core.require(not output.exists() and output != script_file, '不要覆盖已有 INPUT 或原脚本')
+    with evidence_operation():
+        output = Path(output).resolve()
+        core.require(output.parent.is_dir(), 'INPUT 父目录须已存在；请使用独立的内部目录')
+        core.require(not output.exists() and output != Path(script_file).resolve(), '不要覆盖已有 INPUT 或原脚本')
+        data = read_input(script_file, supplied, image_base=image_base or output.parent)
+    # Persist the draft only after all source checks, including the final rehash.
+    with core.locked(output):
+        core.require(not Path(output).exists(), '不要覆盖已有 INPUT')
+        core.save(output, data)
+    return dict(input=str(output), shots=len(data['shots']), duration=sum(s['duration'] for s in data['shots']),
+                next_action='仅提取原文、时长和图片对应；同批补齐原资产及逐镜必要判断后再 prepare。')
+
+
+def read_input(script_file, supplied, *, image_base):
+    """Read raw source and ordered correspondence; no image decoding or output."""
+    script_file = Path(script_file).resolve()
     # Byte decoding preserves CRLF and BOM handling; universal-newline reads would change excerpts.
-    source = script_file.read_bytes().decode('utf-8-sig')
+    payload = script_file.read_bytes()
+    import hashlib
+    core.require(core.sha(script_file) == hashlib.sha256(payload).hexdigest(), '提取时脚本已变化，请重试')
+    source = payload.decode('utf-8-sig')
     shots = parse(source, script_file.name)
     report = Report()
     if report.kind(supplied, list, 'images'):
         report.check(len(supplied) == len(shots), 'images',
                      f'图片数量与脚本镜头数量不一致：{len(supplied)} 张／{len(shots)} 镜')
-        base = Path(image_base).resolve() if image_base is not None else output.parent
+        base = Path(image_base).resolve()
         for i, row in enumerate(supplied):
             where = f'images[{i}]'
             if isinstance(row, dict):
@@ -72,9 +89,4 @@ def extract(script_file, supplied, output, *, image_base=None):
                 if i < len(shots):
                     shots[i]['image'] = str(path)
     report.finish()
-    data = dict(input_version=1, title=script_file.stem, source_script=source, assets=[], shots=shots)
-    with core.locked(output):
-        core.require(not output.exists(), '不要覆盖已有 INPUT')
-        core.save(output, data)
-    return dict(input=str(output), shots=len(shots), duration=sum(s['duration'] for s in shots),
-                next_action='仅提取原文、时长和图片对应；按精简模板同批补齐原资产及逐镜必要判断后再 prepare。')
+    return dict(input_version=1, title=script_file.stem, source_script=source, assets=[], shots=shots)

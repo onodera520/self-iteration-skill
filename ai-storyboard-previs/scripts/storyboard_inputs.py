@@ -14,6 +14,10 @@ def enabled(p):
     return p.get('config', {}).get('workflow') == 'storyboard_images'
 
 
+def single_pass(ctx):
+    return ctx.get('review_scope', {}).get('view_policy') == 'single_pass'
+
+
 @memo_read
 def image_info(project, value):
     path = core.resolve(project, value)
@@ -78,6 +82,19 @@ def context(p, project, gid):
                     uncertainty_rule='Unclear necessary details or unknown phase require zoom/clarification, never automatic FAIL.',
                     visual_match_basis='narrative_equivalence', noncritical_visual_variations_allowed=True,
                     group_checks=['shot', 'continuity', 'story'], group_duration_basis='script_plan'))
+    # Absent policy means historical behavior: existing contexts/frozen receipts
+    # keep their fingerprints. New preparations opt in explicitly.
+    if p.get('config', {}).get('storyboard_review_policy') == 'single_pass':
+        result['review_scope'].update(view_policy='single_pass', asset_visual_comparison='on_request',
+            uncertainty_rule='Record unclear necessary details as uncertain and deliver; no automatic zoom or second view.',
+            continuity_evidence='Reuse recorded neighbouring visible facts; do not reopen reviewed images.',
+            offscreen_rule='Correct visible action/pose can PASS when the scripted prop or support lies outside the crop and no visible fact contradicts it. Do not claim unseen objects were observed or mark uncertain solely because they are offscreen.',
+            facing_rule='A visibly wrong character-facing direction specified by the script must FAIL. Judge against the scripted reference, not camera angle, reverse-shot projection or gaze alone; do not invent an unspecified direction.',
+            relaxation_levels=[
+                'Core subjects and necessary relations match; allow shot-size/camera-angle differences, not a wrong scripted character-facing direction.',
+                'Core subjects and necessary relations match; allow reasonable action-phase/lighting differences.',
+                'All essential narrative elements match; optional visual details may differ.'],
+            essential_conflicts='Visible contradictions of scripted actor, key prop, holder, plot state or specified character-facing direction cannot pass at any level. Offscreen cropping alone is not a contradiction.')
     if has_input_groups(p):
         result.update(input_shot_groups=copy.deepcopy(p['input_shot_groups']), input_group_validation=input_partition(p))
     else:
@@ -181,7 +198,7 @@ def record_review(p, project, review):
             core.require('FAIL' in per.values() and localized and 'FAIL' in checks.values(), '不符合需有明确可见矛盾')
         else:
             core.require('uncertain' in per.values() and 'FAIL' not in per.values() and text(row.get('followup')),
-                         '待核查需说明放大原图或澄清事项，不能隐藏明确错误')
+                         '待核查需说明具体无法确认的信息，不能隐藏明确错误')
         core.require(ref.get('decision') in ('anchor', 'ai_fill', 'pending') and text(ref.get('reason')) and
                      (ref.get('derivable') is None or type(ref.get('derivable')) is bool), '省图判断不完整')
         if verdict != 'PASS':

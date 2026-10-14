@@ -1,0 +1,50 @@
+{
+  "input_version": 1,
+  "title": "普通校对输入示例：钥匙交接",
+  "source_script": "镜头1，【时长】2s，【镜头设计】门厅全景。\n【镜头内容】黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。\n镜头2，【时长】2s，【镜头设计】中景。\n【镜头内容】男孩接住钥匙，女孩松手。",
+  "assets": [
+    {"id": "girl", "kind": "character", "description": "黄外套女孩", "path": "assets/girl.png"},
+    {"id": "boy", "kind": "character", "description": "蓝外套男孩", "path": "assets/boy.png"},
+    {"id": "hall", "kind": "scene", "description": "木门旁的门厅", "path": "assets/hall.png"},
+    {"id": "key", "kind": "prop", "description": "带红色挂件的钥匙", "path": "assets/key.png"}
+  ],
+  "input_shot_groups": [["S01", "S02"]],
+  "shots": [
+    {
+      "id": "S01",
+      "script": "镜头1，【时长】2s，【镜头设计】门厅全景。\n【镜头内容】黄外套女孩手持红挂件钥匙，蓝外套男孩站在木门旁。",
+      "image": "storyboards/S01.png",
+      "scene_id": "hall",
+      "continuity_id": "handoff",
+      "duration": 2,
+      "duration_source": {"kind": "script", "ref": "镜头1：【时长】2s"},
+      "asset_ids": ["girl", "boy", "hall", "key"],
+      "required_result": "建立两人与钥匙的位置关系",
+      "intent": {"critical_result": false, "narrative_turn": false, "required_cut": false},
+      "requirements": {
+        "status": "ready",
+        "keyframe": {"phase": "entry", "description": "女孩持红挂件钥匙，男孩站在木门旁"},
+        "must_have": ["黄外套女孩持红挂件钥匙", "蓝外套男孩与木门的位置关系可辨认"],
+        "provenance": [{"field": "purpose,keyframe,must_have", "status": "script", "source": "镜头1：女孩手持红挂件钥匙，男孩站在木门旁"}]
+      }
+    },
+    {
+      "id": "S02",
+      "script": "镜头2，【时长】2s，【镜头设计】中景。\n【镜头内容】男孩接住钥匙，女孩松手。",
+      "image": "storyboards/S02.png",
+      "scene_id": "hall",
+      "continuity_id": "handoff",
+      "duration": 2,
+      "duration_source": {"kind": "script", "ref": "镜头2：【时长】2s"},
+      "asset_ids": ["girl", "boy", "hall", "key"],
+      "required_result": "确认钥匙交接完成",
+      "intent": {"critical_result": true, "narrative_turn": false, "required_cut": false},
+      "requirements": {
+        "status": "ready",
+        "keyframe": {"phase": "exit", "description": "男孩拿稳钥匙，女孩已经松手"},
+        "must_have": ["男孩拿稳红挂件钥匙", "女孩已经松手"],
+        "provenance": [{"field": "purpose,keyframe,must_have", "status": "script", "source": "镜头2：男孩接住钥匙，女孩松手；承接镜头1的红挂件钥匙"}]
+      }
+    }
+  ]
+}

@@ -1,17 +1,27 @@
 # 字段速查
 
-正常任务先用本表及精简输入模板填写，不为了找字段遍历脚本。保留 prepare 生成的工作单结构和指纹；不要自己重建 WORKLIST。
+保留 prepare 生成的 WORKLIST 结构和指纹；正常新任务用 `--concise` 生成版本4，SKILL 入口已列出普通校对字段，不另读本表。只有显式状态建模、省图或特殊证据需要扩展字段时再查，不遍历源码找字段。
 
 | 位置 | 必填与易错点 |
 | --- | --- |
-| INPUT facts | entity 精确匹配 assets[].id；attribute、value、status、critical、phase、source 齐全。status=known/unknown；phase=static/before/after；source={kind:script/asset/inference, ref:具体出处}。没有对应资产的要求放 requirements，不造实体 |
+| INPUT facts | 普通保留图校对可省略或 []，可见事实仍须写 observation.visible_facts。明确状态建模或省图时才填：entity 精确匹配 assets[].id；attribute、value、status、critical、phase、source 齐全。status=known/unknown；phase=static/before/after；source={kind:script/asset/inference, ref:具体出处}。不要把整镜剧情写成 static 属性；没有对应资产的要求放 requirements，不造实体。未填省图依据保守保留原图 |
 | INPUT requirements | status=ready；keyframe={phase:entry/action/exit, description:当前参考阶段}；provenance=[{field:所支持字段, status:observed/user_provided/script/assumed/unknown, source:具体出处}]。provenance.status 与 facts.source.kind 不是同一组枚举；过程图不强制终态，参见审查规则 |
-| WORKLIST 每镜 | verdict=PASS/FAIL/uncertain；reference_phase=entry/action/exit/unknown；observation.visible_facts 为非空字符串数组，实际观察须支撑检查与阶段 |
-| 每镜 checks | 七个键 identity、scene、props、composition、key_state、continuity、cleanliness，值均为 PASS/FAIL/uncertain。关键状态键是 key_state，不是 action；全批 checks 另用 shot、continuity、story |
-| FAIL / uncertain | 两者必须写非空 reason，不能只在 issues 写问题；uncertain 另写具体 followup。PASS 的 reason 与空 followup 由程序补 |
-| reference | 保留 anchor/false/空 basis_shot_ids；省图 ai_fill/true/同组双侧依据及非空 reason；FAIL 或 uncertain 用 pending/null，不省图 |
-| issues 每项 | id、shot_ids、severity=low/medium/high/critical、problem、expected、actual、fix；asset_ids、asset_comparison_ids 即使无关联也填 []。不要遗漏 problem。v2 自动补同镜 evidence 和 repair_target |
-| FAIL 的返修依据 | 每镜一条 repair_assessments，字段和短例见 [返修依据](repair-assessments.md)；原文引文、影响与修正由代理判断，不能只填 issue_ids |
-| asset_comparisons | 每项 id、shot_id、asset_id、aspect=wardrobe/appearance/prop/scene、decision；PASS 填实际 stable_matches；FAIL 填 stable_conflicts=[{feature,expected,observed,environment_exclusion}] 并关联 issue；uncertain 填必要但不可见的 unobservable_features 与 followup。人物对照另填 story_requirement，非 PASS 还填 story_impact。v2 补哈希、同镜证据及未用的辅助空数组，不能代填实际判断 |
+| INPUT state_changes | 普通校对可省略。已填写的真实变化仍须来源、authorized、before/after 及匹配的 requirements.entry_state 或明确继承；阶段及跨镜状态冲突在 prepare 检查，不等待 complete。不能为满足必填而编造变化或改名隐藏冲突 |
+| 每镜结论 | verdict=PASS/FAIL/uncertain 明确覆盖主体内容、状态承接、参考可用性三组；reference_phase=entry/action/exit/unknown；PASS 的 match_level=0–3，其他为 null。未知阶段不得 PASS |
+| observation.visible_facts | 非空字符串数组，复用首看已存事实，须支撑本镜判断。动作／姿态正确而道具或脚下位置出框可通过，只写动作和裁切，不把画外物体写成已看见；脚本明确朝向相反须记错误。有事实不代表已经通过 |
+| findings | PASS/uncertain 为 []；FAIL 至少一项。每个错误只填写下列证据一次，程序生成 reason、issues、repair_assessments，不另写这些重复字段 |
+| unresolved | 无疑点为 []；uncertain 至少一项 {check:具体项, reason:无法确认的必要信息}。不放大、不排复查；FAIL 也可保留其他疑点 |
+| reference | 通常省略，由程序补保留图或暂不省图。仅建议省图时写 {decision:ai_fill, derivable:true, basis_shot_ids:[同组前镜,同组后镜], reason:明确推导理由}；双侧须 PASS 且保留，保护首尾及必要锚点，不自动降低省图门槛 |
+| 根字段 | reviewed_groups 固定 content/state/reference；核对分组后 grouping_checked=true；无整体限制 limitations=[]。不另写全批 checks、issues 或 repair_assessments |
 
-一次填写完再 complete，不增加独立的重复预检轮次。使用原图路径；确需复制原图时保留原扩展名与字节，不把 WebP 复制后统一命名成 PNG。若输入本身后缀异常，先定位真实解码问题，保留原文件，不把改名当作格式转换，也不把输入问题计为剧情 FAIL。
+FAIL 的 findings 每项：
+
+```json
+{"check":"props","script_quote":"男孩接住钥匙，女孩松手","actual":"结束阶段仍由女孩持钥匙","fix":"修改该分镜图为男孩拿稳钥匙、女孩松手，保留其他脚本内容","kind":"wrong_transfer_result","affects_story":true,"preserves_script":true,"impact":"交接完成的关键结果与脚本相反"}
+```
+
+check 为 identity/scene/props/composition/key_state/continuity/cleanliness 之一；引文逐字来自同镜脚本，actual 是可见矛盾，fix 保留原意。kind=ordinary 表示普通明确错误，affects_story 显式 true/false，preserves_script=true；普通错误不必另写 impact，程序复用引文与矛盾。关键错误 kind 为 missing_key_node/wrong_actor/broken_causality/wrong_transfer_result/explicit_key_requirement，须 affects_story=true 并明确 impact。严重损坏 kind=severe_visual_damage，另写 impact、damage_description、obscured_content；原图 SHA 自动绑定。分类来自实际判断，不能从文字自动猜测。
+
+默认 asset_comparisons=[]，不为填字段打开原资产。只有用户明确要求资产外观对照时才写：id、shot_id、asset_id、aspect=wardrobe/appearance/prop/scene、decision。PASS 写 stable_matches；FAIL 写 stable_conflicts=[{feature,expected,observed,environment_exclusion}] 并在 finding 的 asset_ids/asset_comparison_ids 关联；uncertain 写 unobservable_features 与 followup。人物对照另写 story_requirement，非 PASS 写 story_impact。程序补来源哈希和同镜证据，不代填判断。
+
+一次填写完直接 complete。保留原图扩展名与字节，输入打不开先修正，不计剧情 FAIL。版本1/2/3仍可恢复；其独立 checks、issues、repair_assessments 格式仅旧任务需要，见 [图片接口](storyboard-images.md)及 [返修依据](repair-assessments.md)。

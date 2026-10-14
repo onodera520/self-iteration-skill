@@ -26,6 +26,7 @@ RULES = {
     "NOVEL_CRITICAL": "新增关键事实需要视觉依据",
     "LOCKED_ANCHOR": "用户指定或返修恢复的参考图已锁定",
     "SEMANTIC_UNAPPROVED": "没有明确的低风险语义补足评估",
+    "FACTS_UNRECORDED": "未录入省图所需的状态依据，保留原图",
     "ANCHOR_SELECTED": "在省图约束内选择保留参考图",
     "BRACKETED_FILL": "低风险候选由同组前后锚点约束，仍须真实预演验证",
 }
@@ -50,10 +51,11 @@ def validate_facts(p, report=None, present_only=False):
     for i, s in enumerate(p['shots']):
         path = shot_path(s, i)
         # Prepared image projects may omit optional planner fields; supplied fields must be valid.
-        facts = s.get('facts')
+        image_workflow = p.get('config', {}).get('workflow') == 'storyboard_images'
+        facts = s.get('facts', [] if image_workflow else None)
         if not present_only or 'facts' in s:
             if report.kind(facts, list, path + '.facts'):
-                report.check(bool(facts), path + '.facts', 'sourced facts required: ' + s['id'])
+                report.check(image_workflow or bool(facts), path + '.facts', 'sourced facts required: ' + s['id'])
                 keys = set()
                 for j, f in enumerate(facts):
                     where = f'{path}.facts[{j}]'
@@ -105,14 +107,10 @@ def fact_key(f):
 
 
 def validate_ledger(p, report):
-    """Bring the existing planner gate forward for complete, well-shaped inputs."""
-    fields = {'facts', 'state_changes', 'intent', 'omission_assessment', 'asset_ids',
-              'scene_id', 'reference'}
-    if not all(fields <= set(s) for s in p['shots']):
-        return  # Legacy inputs retain their existing planning-time requirements.
+    """Check supplied state evidence before review, independently of omission metadata."""
     if any(r['path'].startswith(('shots', 'assets')) for r in report.errors):
         return  # Do not interpret malformed upstream facts.
-    for row in analyze(p):
+    for row in state_trace(p):
         for warning in row['warnings']:
             if warning['kind'] in STATE_CONFLICTS:
                 report.check(False, f"shots[{row['shot_id']}].facts/state_changes",
@@ -121,63 +119,40 @@ def validate_ledger(p, report):
                              "reconcile source, phase and authorized change; do not rename the attribute to hide it")
 
 
-def analyze(p):
-    """Novelty compares earlier known facts; state is chronological, never future-derived."""
-    validate_facts(p)
-    seen, seen_characters, expected, result = set(), set(), {}, []
-    kinds = {a["id"]: a["kind"] for a in p["assets"]}
-    for n, s in enumerate(p["shots"]):
-        reasons, warnings = [], []
-        if n == 0 or n == len(p["shots"])-1 or p["shots"][n-1]["scene_id"] != s["scene_id"] or (n+1 < len(p["shots"]) and p["shots"][n+1]["scene_id"] != s["scene_id"]):
-            reasons.append("SCENE_BOUNDARY")
-        characters = {a for a in s["asset_ids"] if kinds[a] == "character"}
-        if characters - seen_characters:
-            reasons.append("FIRST_ENTITY")
-        seen_characters |= characters
-        if s["reference"].get("locked"):
-            reasons.append("LOCKED_ANCHOR")
-        if s["intent"]["critical_result"] or s["intent"]["narrative_turn"]:
-            reasons.append("CRITICAL_RESULT")
-        new, known = [], []
-        # Check all facts against the prior-shot set before adding this shot.
-        for f in s["facts"]:
+def state_trace(p):
+    """Chronological ledger shared by input preflight and post-review planning.
+
+    Callers validate the supplied facts/changes first. No visual verdict or
+    omission assessment is needed to check a declared state contradiction.
+    """
+    expected, result = {}, []
+    for s in p['shots']:
+        warnings = []
+        for f in s.get('facts', []):
             uncertain = f["status"] == "unknown" or f["source"]["kind"] == "inference"
             if uncertain:
-                if f["critical"]:
-                    reasons.append("UNKNOWN_CRITICAL")
                 warnings.append({"kind": "unconfirmed_fact", "fact": fact_key(f), "source": f["source"]})
                 if f["phase"] in ("before", "static"):
                     expected[fact_key(f)] = {"value": None, "status": "unknown", "source": f["source"], "shot_id": s["id"]}
                 continue
-            token = digest([f["entity"], f["attribute"], f["value"]])
-            known.append(token)
-            if token not in seen:
-                new.append(f)
-                if f["critical"]:
-                    reasons.append("NOVEL_CRITICAL")
             key = fact_key(f)
             if f["phase"] in ("before", "static"):
                 baseline = expected.get(key)
                 if baseline and baseline.get("status") != "unknown" and baseline["value"] != f["value"]:
                     warnings.append({"kind": "baseline_conflict", "fact": key, "previous": baseline, "declared": f})
-                    reasons.append("UNKNOWN_CRITICAL")
                 expected[key] = {"value": f["value"], "source": f["source"], "shot_id": s["id"]}
         before_state = copy.deepcopy(expected)
-        changes = {c["entity"] + "." + c["attribute"]: c for c in s["state_changes"]}
+        changes = {c["entity"] + "." + c["attribute"]: c for c in s.get('state_changes', [])}
         for key, c in changes.items():
-            if c["critical"]:
-                reasons.append("STATE_CHANGE")
             baseline = expected.get(key)
             if not c["authorized"] or c["source"]["kind"] == "inference" or c["before"] is None or c["after"] is None:
                 warnings.append({"kind": "unconfirmed_change", "change": c})
-                reasons.append("UNKNOWN_CRITICAL")
                 expected[key] = {"value": None, "status": "unknown", "source": c["source"], "shot_id": s["id"]}
                 continue
             if baseline and baseline.get("status") != "unknown" and baseline["value"] != c["before"]:
                 warnings.append({"kind": "change_start_conflict", "fact": key, "previous": baseline, "change": c})
-                reasons.append("UNKNOWN_CRITICAL")
             expected[key] = {"value": c["after"], "source": c["source"], "shot_id": s["id"]}
-        for f in s["facts"]:
+        for f in s.get('facts', []):
             if f["phase"] != "after":
                 continue
             key = fact_key(f)
@@ -187,17 +162,56 @@ def analyze(p):
             baseline = expected.get(key)
             if baseline and baseline.get("status") != "unknown" and baseline["value"] != f["value"]:
                 warnings.append({"kind": "unexplained_after_state", "fact": key, "previous": baseline, "declared": f})
-                reasons.append("UNKNOWN_CRITICAL")
             expected[key] = {"value": f["value"], "source": f["source"], "shot_id": s["id"]}
-        a = s["omission_assessment"]
+        result.append(dict(shot_id=s['id'], expected_before=before_state,
+                           expected_after=copy.deepcopy(expected),
+                           state_changes=copy.deepcopy(s.get('state_changes', [])), warnings=warnings))
+    return result
+
+
+def analyze(p):
+    """Novelty compares earlier known facts; state never comes from future shots."""
+    validate_facts(p)
+    seen, seen_characters, result = set(), set(), []
+    kinds = {a['id']: a['kind'] for a in p['assets']}
+    for n, (s, row) in enumerate(zip(p['shots'], state_trace(p))):
+        reasons = []
+        if n == 0 or n == len(p['shots'])-1 or p['shots'][n-1]['scene_id'] != s['scene_id'] or (n+1 < len(p['shots']) and p['shots'][n+1]['scene_id'] != s['scene_id']):
+            reasons.append('SCENE_BOUNDARY')
+        characters = {a for a in s['asset_ids'] if kinds[a] == 'character'}
+        if characters - seen_characters:
+            reasons.append('FIRST_ENTITY')
+        seen_characters |= characters
+        if s['reference'].get('locked'):
+            reasons.append('LOCKED_ANCHOR')
+        if s['intent']['critical_result'] or s['intent']['narrative_turn']:
+            reasons.append('CRITICAL_RESULT')
+        facts = s.get('facts', [])
+        if not facts:
+            reasons.append('FACTS_UNRECORDED')
+        new, known = [], []
+        for f in facts:
+            if f['status'] == 'unknown' or f['source']['kind'] == 'inference':
+                if f['critical']:
+                    reasons.append('UNKNOWN_CRITICAL')
+                continue
+            token = digest([f['entity'], f['attribute'], f['value']])
+            known.append(token)
+            if token not in seen:
+                new.append(f)
+                if f['critical']:
+                    reasons.append('NOVEL_CRITICAL')
+        if any(c['critical'] for c in s['state_changes']):
+            reasons.append('STATE_CHANGE')
+        if any(w['kind'] in STATE_CONFLICTS or w['kind'] == 'unconfirmed_change' for w in row['warnings']):
+            reasons.append('UNKNOWN_CRITICAL')
+        a = s['omission_assessment']
         if a["allowed"] is not True or a["risk"] != "low":
             reasons.append("SEMANTIC_UNAPPROVED")
         seen.update(known)
-        result.append({"shot_id": s["id"], "novel_known_facts": new,
-                       "novelty_ratio": len(new)/len(known) if known else None,
-                       "known_fact_count": len(known), "mandatory_rules": sorted(set(reasons)),
-                       "expected_before": before_state, "expected_after": copy.deepcopy(expected),
-                       "state_changes": copy.deepcopy(s["state_changes"]), "warnings": warnings})
+        result.append(dict(row, novel_known_facts=new,
+                           novelty_ratio=len(new)/len(known) if known else None,
+                           known_fact_count=len(known), mandatory_rules=sorted(set(reasons))))
     return result
 
 

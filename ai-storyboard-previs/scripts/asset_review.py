@@ -6,6 +6,7 @@ ASPECT_CHECK = {"wardrobe": "identity", "appearance": "identity", "prop": "props
 
 def validate_asset_evidence(p, project_path, review, context):
     from previs import require, resolve
+    from storyboard_inputs import single_pass
 
     def strings(value):
         return isinstance(value, list) and all(isinstance(x, str) and x.strip() for x in value)
@@ -76,12 +77,23 @@ def validate_asset_evidence(p, project_path, review, context):
         decisions = [c["decision"] for c in comparisons if c["shot_id"] == sid and
                      ASPECT_CHECK[c["aspect"]] == "identity"]
         expected = "FAIL" if "FAIL" in decisions else "uncertain" if "uncertain" in decisions else "PASS"
-        require(row["checks"]["identity"] == expected, "identity check contradicts per-aspect asset comparisons")
-        if expected == "PASS":
-            characters = [assets[aid] for aid in shots[sid]["asset_ids"] if assets[aid]["kind"] == "character"]
-            require(all(a["sha256"] != "MISSING" for a in characters), "identity PASS needs current asset")
-            require(not characters or any(e["shot_id"] == sid and bound(e, row) for e in evidence),
-                    "identity PASS needs same-shot visible facts and original-image evidence")
+        if single_pass(context) and not decisions:
+            # Script-bound identity judgments do not require a second asset view.
+            # A mismatch still needs same-shot facts, a localized issue and reason.
+            require(any(e['shot_id'] == sid and bound(e, row) for e in evidence),
+                    'identity judgment needs same-shot visible evidence')
+            if row['checks']['identity'] == 'FAIL':
+                require(row['verdict'] == 'FAIL' and any(sid in i['shot_ids'] for i in review['issues']),
+                        'visible identity conflict needs a localized FAIL')
+            elif row['checks']['identity'] == 'uncertain':
+                require(row['verdict'] in ('uncertain', 'FAIL'), 'unclear identity cannot pass')
+        else:
+            require(row["checks"]["identity"] == expected, "identity check contradicts per-aspect asset comparisons")
+            if expected == "PASS":
+                characters = [assets[aid] for aid in shots[sid]["asset_ids"] if assets[aid]["kind"] == "character"]
+                require(all(a["sha256"] != "MISSING" for a in characters), "identity PASS needs current asset")
+                require(not characters or any(e["shot_id"] == sid and bound(e, row) for e in evidence),
+                        "identity PASS needs same-shot visible facts and original-image evidence")
         # Other asset aspects cannot hide a conflict under a different check.
         for check in ("props", "scene"):
             ds = [c["decision"] for c in comparisons if c["shot_id"] == sid and ASPECT_CHECK[c["aspect"]] == check]

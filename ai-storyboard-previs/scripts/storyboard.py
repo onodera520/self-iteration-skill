@@ -122,18 +122,8 @@ def render_aggregation(p, project, out):
             "choose a new delivery folder to preserve previous files and exclude internal records")
     out.mkdir(parents=True, exist_ok=True)
     esc = delivery_escape
-    lines = ['# ' + esc(p['title']), '', f"共 {len(p['shots'])} 镜。", '',
-             '全部输入原图均展示并链接保存。省图仅建议减少生成参考图，未经生成验证，脚本镜头仍保留。', '',
-             '时长采用脚本计划值，每组4–15秒；建议值单独标注。对白不作逐字或口型同步检查。', '']
-    if not proposal:
-        label = '用户输入分组' if has_input_groups(p) else '整批图片'
-        lines += [f"聚合建议尚未生成或依据已变化，以下按{label}展示，需检查。", ""]
-    elif not proposal["feasible"]:
-        if proposal.get("grouping_mode") == "input":
-            lines += ["输入分组存在冲突，原分组保留；受影响镜头暂不批准省图。", ""]
-            lines += ["分组冲突：" + esc("；".join(proposal["limitations"][:-1])), ""]
-        else:
-            lines += ["聚合尚未完成；P 编号仅为待分组占位，不代表已符合4–15秒及剧情边界要求。", ""]
+    # Planning diagnostics stay in the bound proposal; public delivery starts at the table.
+    lines = ['# ' + esc(p['title']), '', f"共 {len(p['shots'])} 镜。", '']
     from previs import review_current
     reviews = {g["id"]: review_current(p, project, g["id"]) for g in p["groups"]}
     lines += ["## 逐镜审查与取舍", "", "| 分组 | 原镜号 | 镜头时长 | 脚本描述 | 小分镜图 | 检验结果 | 图片处理 | 推导依据镜号 | 问题或修改建议 |",
@@ -168,7 +158,7 @@ def render_aggregation(p, project, out):
             reasons = {'critical': '已确认关键剧情错误', 'severe_visual_damage': '严重画面损坏遮挡必要内容',
                        'cumulative': '普通明确错误涉及至少两镜且占整批至少20%'}
             lines += ['', f"整批达到新视频提示词导出阈值：{reasons[decision['trigger']]}。"]
-    lines += ['', '未达阈值不代表全部图片通过；待核查项需放大原图或澄清后再判断。', '']
+    lines += ['']
     path = out / "分镜说明.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return str(path)
