@@ -10,6 +10,7 @@ from pathlib import Path
 
 import previs as core
 import repair_prompt
+from evidence_runtime import evidence_operation, verified_read
 
 CHECKS = ('story_coverage', 'actors_and_targets', 'objects_and_states',
           'action_order_and_phases', 'spatial_continuity', 'visible_evidence',
@@ -259,6 +260,7 @@ def compile_request(plan, source, p):
     return result
 
 
+@verified_read
 def source_request(p, project, gid):
     import repair_cycle
     return repair_cycle._compose_prompt(p, project, gid, 5, input_aspect=True)
@@ -271,7 +273,8 @@ def finish_plan(p, project, gid, plan, output):
     and evidence, never from an editable draft or the saved reading view.
     """
     from repair_export import _export_request
-    request = compile_request(plan, source_request(p, project, gid), p)
+    with evidence_operation():
+        request = compile_request(plan, source_request(p, project, gid), p)
     record = _export_request(p, project, gid, output, request)
     p.setdefault('repair_prompt_plans', {})[gid] = copy.deepcopy(plan)
     return record
@@ -297,29 +300,45 @@ def main():
             core.save(args.project, p)
             print('Audited prompt exported: ' + record['path'])
             return
-        pending = args.group in p.get('deferred_storyboard_prompts', {})
-        try:
-            request = source_request(p, args.project, args.group)
-        except ValueError:
-            # Keep a newly loaded original prompt available for the required semantic screening.
-            if pending and args.group not in p.get('deferred_storyboard_prompts', {}):
-                core.save(args.project, p)
-            raise
+        plan_file = Path(args.plan_file)
+        source_file = plan_file.with_name(plan_file.stem + '.source.json')
+        view_file = plan_file.with_name(plan_file.stem + '.view.json')
+        inputs_file = plan_file.with_name(plan_file.stem + '.inputs.json')
         if args.action == 'prepare':
-            plan_file = Path(args.plan_file)
-            source_file = plan_file.with_name(plan_file.stem + '.source.json')
-            view_file = plan_file.with_name(plan_file.stem + '.view.json')
-            core.require(not any(path.exists() for path in (plan_file, source_file, view_file)),
+            core.require(not any(path.exists() for path in (plan_file, source_file, view_file, inputs_file)),
                          'use new internal draft/source paths')
+        pending = args.group in p.get('deferred_storyboard_prompts', {})
+        refreshed, preparation_error = False, None
+        with evidence_operation():
+            if args.action == 'prepare':
+                from repair_cycle import refresh_prompt_style
+                refreshed = refresh_prompt_style(p, args.project, args.group)
+            try:
+                request = source_request(p, args.project, args.group)
+            except repair_prompt.PreparationError as exc:
+                preparation_error = exc
+            if preparation_error is None:
+                if args.action == 'prepare':
+                    view = reading_view(request, p)
+                    plan = template(request) if args.detailed else compact_template(request)
+                else:
+                    plan = core.read(args.plan_file)
+                    validate(plan, request)
+        # Recheck evidence before saving diagnostic inputs, drafts or a refreshed decision.
+        if preparation_error is not None:
+            if args.action == 'prepare':
+                core.save(inputs_file, preparation_error.inputs)
+            if refreshed or (pending and args.group not in p.get('deferred_storyboard_prompts', {})):
+                core.save(args.project, p)
+            raise preparation_error
+        if args.action == 'prepare':
             core.save(source_file, request)
-            core.save(view_file, reading_view(request, p))
-            core.save(plan_file, template(request) if args.detailed else compact_template(request))
-            if pending:
+            core.save(view_file, view)
+            core.save(plan_file, plan)
+            if pending or refreshed:
                 core.save(args.project, p)
             print(f'Batch prompt draft: {plan_file}\nReading view: {view_file}\nFull source: {source_file}')
         else:
-            plan = core.read(args.plan_file)
-            validate(plan, request)
             if args.apply:
                 p.setdefault('repair_prompt_plans', {})[args.group] = plan
                 core.save(args.project, p)

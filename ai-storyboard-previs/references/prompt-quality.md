@@ -30,7 +30,7 @@
 
 ## 一次准备与工具门禁
 
-先完成资产风格、必要纯视觉转换及可选旧提示词筛选，重新 decide。随后：
+缺项时先读 FINISH_REPORT.prompt_inputs 指向的 PROMPT.inputs.json，一次完成资产风格、必要纯视觉转换、可选旧提示词筛选和目标画幅，再直接 prepare；不逐项试错、单独 decide 或重跑 complete。随后：
 
 ```text
 python scripts/repair_quality.py prepare PROJECT.json G01 INTERNAL_DIR/PROMPT_PLAN.json
@@ -39,6 +39,8 @@ python scripts/repair_quality.py finish PROJECT.json G01 INTERNAL_DIR/PROMPT_PLA
 ```
 
 prepare 生成草稿、`.source.json` 完整快照和 `.view.json` 阅读视图，不生成用户提示词或调用模型/API，不覆盖已有文件。默认只读 view：保留全镜正文、设计、所有来源贡献、阶段、必要原文、固定规则及资产风格；完全相同的贡献合并列出路径，省去重复渲染的整份 prompt 与内部哈希。来源出处或筛选有疑问才定位 source，不再通读同一份长文本。视图不是新的权威输入；finish 从当前项目与证据重建来源，拒绝过期计划。来源改变后重新 prepare，不能手改旧哈希掩盖未复核。
+
+准备仍缺项时集中报出，并写 `.inputs.json`：原资产顺序／原图路径／SHA、需转换字段原文／SHA、已冻结旧提示词及画幅信息。代理据此填项目中的对应字段，不能从空模板自动批准；修正后使用新的内部计划路径。该文件不替代来源，也无需用户登记。prepare 仅能刷新资产风格准备造成的绑定变化；图片、脚本、原资产或审查变化必须先重新核验。prepare／finish 各在一次证据周期内复用读取，保存或导出前重验全部文件内容；finish 不刷新旧计划。
 
 默认 `plan_version: 2` 精简草稿：
 

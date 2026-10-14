@@ -7,6 +7,8 @@ from time import perf_counter
 
 import previs as core
 import storyboard_inputs as images
+import storyboard_overviews as overviews
+import agent_context
 import planner
 import repair_cycle as repair
 from evidence_runtime import evidence_operation
@@ -134,6 +136,8 @@ def worklist(ctx):
     result = {k: copy.deepcopy(full[k]) for k in ('group_id', 'context_fingerprint', 'checks', 'grouping_checked',
               'issues', 'uncertainties', 'asset_comparisons', 'repair_assessments')}
     result.update(worklist_version=2, limitations=[], shots=[])
+    if ctx.get('review_overviews'):
+        result['overview_manifest'] = copy.deepcopy(ctx['review_overviews']['manifest'])
     for row, ref in zip(full['shot_reviews'], full['reference_assessments']):
         item = {k: v for k, v in row.items() if k in ('shot_id', 'verdict', 'reference_phase', 'checks')}
         item['reference'] = {k: v for k, v in ref.items() if k in ('decision', 'derivable', 'basis_shot_ids')}
@@ -145,6 +149,7 @@ def worklist(ctx):
 def expand(ctx, data):
     core.require(data.get('worklist_version') in (1, 2) and data.get('context_fingerprint') == ctx['context_fingerprint']
                  and data.get('group_id') == ctx['group_id'], '审查依据已变化，请重新 prepare 并核验工作表')
+    overviews.validate(ctx, data.get('overview_manifest'))
     full = images.draft(ctx)
     core.require([r.get('shot_id') for r in data.get('shots', [])] == full['coverage']['shot_ids'],
                  '逐镜工作表必须按输入顺序完整覆盖每镜一次')
@@ -255,12 +260,84 @@ def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *
                 core.require(isinstance(original_prompt, str) and original_prompt.strip(), '原提示词须为非空文本')
                 p.setdefault('deferred_storyboard_prompts', {})[gid] = dict(text=original_prompt)
             ctx = images.context(p, project, gid)
+            run_dir.mkdir(parents=True)
+            ctx['review_overviews'] = overviews.build(ctx, run_dir, project)
             draft = worklist(ctx)
-        run_dir.mkdir(parents=True)
         core.save(run_dir / 'CONTEXT.json', ctx)
         core.save(run_dir / 'WORKLIST.json', draft)
+        core.save(run_dir / 'REVIEW.view.json', agent_context.reading_view(ctx))
+        core.save(run_dir / 'RUN.json', dict(run_version=1, project=str(project), group_id=gid,
+                  context_fingerprint=ctx['context_fingerprint'], context=str(run_dir / 'CONTEXT.json'),
+                  worklist=str(run_dir / 'WORKLIST.json'), review_view=str(run_dir / 'REVIEW.view.json'),
+                  planned_output=str(Path(output).resolve()) if output else None,
+                  next_action='实际看图并及时保存 WORKLIST；压缩后先 resume 校验来源，不重新 prepare。'))
         core.save(project, p)
-    return dict(group_id=gid, context=str(run_dir / 'CONTEXT.json'), worklist=str(run_dir / 'WORKLIST.json'))
+    return dict(group_id=gid, context=str(run_dir / 'CONTEXT.json'), worklist=str(run_dir / 'WORKLIST.json'),
+                review_view=str(run_dir / 'REVIEW.view.json'), run_receipt=str(run_dir / 'RUN.json'),
+                review_overviews=ctx['review_overviews'])
+
+
+def resume(project, run_dir, shot_ids=None, page=None):
+    """Recover persisted progress after compaction, checking original evidence afresh."""
+    project, run_dir = (Path(v).resolve() for v in (project, run_dir))
+    with core.locked(project), evidence_operation():
+        p = core.read(project)
+        core.require(images.enabled(p), '恢复入口只用于已准备的分镜图项目')
+        data = core.read(run_dir / 'WORKLIST.json')
+        stored = core.read(run_dir / 'CONTEXT.json')
+        core.require(isinstance(data, dict) and data.get('worklist_version') in (1, 2)
+                     and isinstance(data.get('group_id'), str) and isinstance(stored, dict),
+                     '工作单版本、批次或上下文无效')
+        ctx = images.context(p, project, data['group_id'])
+        core.require(data.get('context_fingerprint') == stored.get('context_fingerprint') == ctx['context_fingerprint']
+                     and data.get('group_id') == stored.get('group_id'),
+                     '审查依据已变化，请重新 prepare 并核验工作表；旧结论不能用于新来源')
+        core.require({k: v for k, v in stored.items() if k != 'review_overviews'} == ctx,
+                     '保存的上下文已变化，不能作为恢复依据')
+        rows = data.get('shots')
+        core.require(isinstance(rows, list) and all(isinstance(r, dict) for r in rows)
+                     and [r.get('shot_id') for r in rows] == [s['shot_id'] for s in ctx['shots']],
+                     '逐镜工作表必须按输入顺序完整覆盖每镜一次')
+        overviews.validate(ctx, data.get('overview_manifest'))
+        if stored.get('review_overviews'):
+            core.require(data.get('overview_manifest') == stored['review_overviews']['manifest'],
+                         '工作单总览绑定已变化，不能跳过来源校验')
+            manifest = core.read(data['overview_manifest']['path'])
+            ctx['review_overviews'] = overviews.reading_materials(manifest)
+        core.require(shot_ids is None or page is None, '--page 与 --shots 只选一个')
+        view_file = run_dir / 'REVIEW.view.json'
+        if shot_ids is None and page is None and view_file.exists():
+            core.require(core.read(view_file) == agent_context.reading_view(ctx),
+                         '阅读视图已变化；使用 resume --shots 镜号重新读取当前来源，不采用改写视图')
+        result = dict(group_id=ctx['group_id'], context_fingerprint=ctx['context_fingerprint'],
+                      worklist=str(run_dir / 'WORKLIST.json'),
+                      review_view=str(view_file if view_file.exists() else run_dir / 'CONTEXT.json'),
+                      progress=agent_context.progress(data),
+                      next_action='按保存记录继续实际审查；--page 页码读取一批，--shots 镜号定位本镜和相邻镜。'
+                                  'complete 仍校验整批，不凭恢复状态批准。')
+        if shot_ids is not None or page is not None:
+            result['view'] = (agent_context.batch_view(ctx, page) if page is not None
+                              else agent_context.reading_view(ctx, shot_ids))
+            included = {s['shot_id'] for s in result['view']['shots']}
+            result['saved_rows'] = [r for r in rows if r['shot_id'] in included]
+            for field in ('issues', 'uncertainties', 'asset_comparisons', 'repair_assessments'):
+                entries = data.get(field, [])
+                core.require(isinstance(entries, list) and all(isinstance(r, dict) and
+                             isinstance(r.get('shot_ids', []), list) and
+                             all(isinstance(sid, str) for sid in r.get('shot_ids', [])) for r in entries),
+                             field + ' 须为含有效镜号关联的记录列表')
+                result[field] = [r for r in entries if r.get('shot_id') in included
+                                 or included.intersection(r.get('shot_ids', []))]
+            requested = set(result['view'].get('requested_shot_ids', []))
+            recorded = set(result['progress']['recorded_shot_ids'])
+            result['detail_queue'] = [dict(shot_id=r['shot_id'], image_path=s['image']['path'],
+                                           reason=r.get('reason', ''), followup=r.get('followup', ''))
+                                     for r, s in zip(rows, ctx['shots']) if r['shot_id'] in requested
+                                     and r['shot_id'] in recorded
+                                     and (r.get('verdict') == 'uncertain'
+                                          or (isinstance(r.get('checks'), dict)
+                                              and 'uncertain' in r['checks'].values()))]
+    return result
 
 
 def load_original_prompt(p, project, gid):
@@ -317,11 +394,14 @@ def complete(project, worklist_file, output, run_dir, profile=None, target_aspec
                 if decision['triggered']:
                     import repair_quality
                     try:
-                        load_original_prompt(p, project, ctx['group_id'])
                         source = repair_quality.source_request(p, project, ctx['group_id'])
                     except (ValueError, OSError, UnicodeError) as exc:
                         report['prompt_status'] = 'needs_preparation'
                         report['prompt_next_action'] = str(exc)
+                        if isinstance(getattr(exc, 'inputs', None), dict):
+                            inputs_file = run_dir / 'PROMPT.inputs.json'
+                            core.save(inputs_file, exc.inputs)
+                            report['prompt_inputs'] = str(inputs_file)
                     else:
                         core.save(run_dir / 'PROMPT.source.json', source)
                         core.save(run_dir / 'PROMPT.view.json', repair_quality.reading_view(source, p))
@@ -337,6 +417,7 @@ def complete(project, worklist_file, output, run_dir, profile=None, target_aspec
         finally:
             report.update(ended_at=utc_now(), seconds=round(perf_counter() - started, 4))
             core.save(run_dir / 'FINISH_REPORT.json', report)
+            core.save(run_dir / 'FINISH.view.json', agent_context.cli_summary('complete', report, run_dir))
     return report
 
 
@@ -354,10 +435,17 @@ def main():
     prep.add_argument('--run-dir', required=True)
     prep.add_argument('--output', help='Planned new delivery directory; check separation before preparing')
     prep.add_argument('--original-prompt', help='Optional UTF-8 prompt file; read only after the repair threshold triggers')
+    recovery = sub.add_parser('resume', help='Check saved progress; read selected shots and their neighbours')
+    recovery.add_argument('project'); recovery.add_argument('run_dir')
+    selection = recovery.add_mutually_exclusive_group()
+    selection.add_argument('--shots', nargs='+', help='Selected shot IDs, with adjacent continuity context')
+    selection.add_argument('--page', type=int, help='One nine-shot batch with relevant assets and boundary context')
     done = sub.add_parser('complete')
     done.add_argument('project'); done.add_argument('worklist')
     done.add_argument('--output', required=True); done.add_argument('--run-dir', required=True)
     done.add_argument('--profile'); done.add_argument('--target-aspect')
+    for parser in (raw, prep, recovery, done):
+        parser.add_argument('--detailed', action='store_true', help='Print full tool result; normally keep evidence on disk')
     args = ap.parse_args()
     try:
         if args.action == 'extract':
@@ -367,13 +455,16 @@ def main():
             result = prepare(args.project, core.read(args.images) if args.images else None, args.run_dir,
                              input_data=core.read(args.input) if args.input else None,
                              original_prompt_file=args.original_prompt, output=args.output)
+        elif args.action == 'resume':
+            result = resume(args.project, args.run_dir, args.shots, args.page)
         else:
             result = complete(args.project, args.worklist, args.output, args.run_dir,
                               core.read(args.profile) if args.profile else None, args.target_aspect)
     except (ValueError, OSError, UnicodeError) as exc:
         ap.exit(2, f'{args.action} 失败：{exc}\n已停止本步骤；修正后重试，不继续运行依赖其输出的步骤。\n')
     import json
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    summary = result if args.detailed else agent_context.cli_summary(args.action, result, getattr(args, 'run_dir', None))
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

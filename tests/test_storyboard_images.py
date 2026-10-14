@@ -97,6 +97,11 @@ class StoryboardImagesTests(fixtures.Base):
         original = copy.deepcopy(data)
         project = self.path.parent / 'new-project.json'
         batch.prepare(project, None, self.path.parent/'compact-prep', input_data=data)
+        prepared_context = core.read(self.path.parent/'compact-prep/CONTEXT.json')
+        prepared_worklist = core.read(self.path.parent/'compact-prep/WORKLIST.json')
+        self.assertEqual(prepared_context['review_overviews']['images_per_page'], 9)
+        self.assertEqual(prepared_context['review_overviews']['pages'][0]['shot_ids'], ['S01', 'S02', 'S03'])
+        self.assertEqual(prepared_worklist['overview_manifest'], prepared_context['review_overviews']['manifest'])
         p = core.read(project)
         self.assertEqual(data, original)
         self.assertEqual(p['source_script'], self.p['source_script'])
@@ -334,7 +339,9 @@ class StoryboardImagesTests(fixtures.Base):
         with patch('subprocess.run', side_effect=AssertionError('external process')):
             prepared = batch.prepare(self.path, None, self.path.parent/'prep')
             self.p = core.read(self.path)
-            core.save(prepared['worklist'], self.worklist(self.review(omit=True)))
+            work = self.worklist(self.review(omit=True))
+            work['overview_manifest'] = core.read(prepared['worklist'])['overview_manifest']
+            core.save(prepared['worklist'], work)
             result = batch.complete(self.path, prepared['worklist'], self.path.parent/'delivery', self.path.parent/'finish')
         self.assertEqual(result['status'], 'complete')
         self.assertFalse(result['decision']['triggered'])
@@ -400,6 +407,21 @@ class StoryboardImagesTests(fixtures.Base):
         core.record_review(self.p,self.path,r)
         planner.store_aggregation(self.p,self.path,planner.post_review_plan(self.p,self.path,{}))
         self.assertEqual(repair.decide(self.p,self.path,'G01')['trigger'],'severe_visual_damage')
+
+    def test_changed_overview_blocks_review_and_delivery(self):
+        prep = batch.prepare(self.path, None, self.path.parent/'prep')
+        self.p = core.read(self.path)
+        work = self.worklist(self.review())
+        work['overview_manifest'] = core.read(prep['worklist'])['overview_manifest']
+        core.save(prep['worklist'], work)
+        sheet = prep['review_overviews']['pages'][0]['path']
+        Image.new('RGB', (100, 100), 'black').save(sheet)
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, '总览图已变化'):
+            batch.complete(self.path, prep['worklist'], self.path.parent/'blocked-delivery',
+                           self.path.parent/'failed-finish')
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse((self.path.parent/'blocked-delivery').exists())
 
     def test_stale_image_script_assets_and_frozen_revision(self):
         prep = batch.prepare(self.path,None,self.path.parent/'prep')
@@ -593,6 +615,157 @@ class StoryboardImagesTests(fixtures.Base):
         self.assertEqual(p['source_storyboard_prompts']['G01']['text'], '新增冷光参考。')
         self.assertEqual(Path(result['delivery']).read_bytes(), frozen)
         self.assertIsNotNone(core.review_current(p, self.path, 'G01'))
+
+    def test_prompt_gaps_collected_once_and_resumed_without_redoing_review(self):
+        style = self.p.pop('repair_asset_style')
+        self.p['shots'][0]['script'] += '女孩说话。'
+        self.p['source_script'] = '\n'.join(s['script'] for s in self.p['shots'])
+        self.p.pop('repair_baseline', None)
+        Image.new('RGB', (90, 160), 'green').save(self.p['storyboard_images'][0]['path'])
+        core.save(self.path, self.p)
+        prep = batch.prepare(self.path, None, self.path.parent/'gaps-prep', original_prompt='SIMULATED lighting')
+        self.p = core.read(self.path)
+        core.save(prep['worklist'], self.worklist(self.review(fails=['S02'], critical=True)))
+        result = batch.complete(self.path, prep['worklist'], self.path.parent/'gaps-delivery',
+                                self.path.parent/'gaps-done')
+        self.assertEqual(result['prompt_status'], 'needs_preparation')
+        self.assertNotIn('prompt_plan', result)
+        inputs = core.read(result['prompt_inputs'])
+        for term in ('repair_prompt_references', 'Asset style', '混用画幅', 'S01.generation_text'):
+            self.assertIn(term, result['prompt_next_action'])
+        self.assertFalse(inputs['repair_asset_style']['preserves_story'])
+        self.assertEqual([row['sha256'] for row in inputs['repair_asset_style']['assets']],
+                         [row['sha256'] for row in inputs['assets']])
+        self.p = core.read(self.path)
+        old_review = copy.deepcopy(self.p['reviews'])
+        old_aggregation = copy.deepcopy(self.p['aggregation'])
+        frozen = {path: Path(path).read_bytes() for path in self.p['repair_deliveries']['original']['files']}
+        bound = self.p['repair_decisions']['G01']['binding']
+        source = inputs['original_prompt']['source']
+        self.p.update(repair_asset_style=style, storyboard_target_aspect='16:9',
+            repair_prompt_references={'G01': dict(source_sha256=source['text_sha256'],
+                source_fingerprint=source['source_fingerprint'], script_fingerprint=bound['script_fingerprint'],
+                preserves_story=True, compatibility_reason='SIMULATED unnecessary guidance excluded', selections=[],
+                excluded=[dict(source_quote=source['text'], reason='SIMULATED no useful visual detail')])})
+        field = inputs['visual_sources']['S01.generation_text']
+        self.p['repair_visual_adaptations'] = {'S01.generation_text': dict(
+            source_sha256=field['source_sha256'], visual_text=field['source_text'].replace('女孩说话。', ''),
+            preserves_story=True, story_basis='SIMULATED visible script actions retained; no dialogue-only event')}
+        core.save(self.path, self.p)
+        plan_file = self.path.parent/'gaps-plan.json'
+        with patch('sys.argv', ['repair_quality.py', 'prepare', str(self.path), 'G01', str(plan_file)]), \
+                patch('builtins.print'):
+            quality.main()
+        self.p = core.read(self.path)
+        self.assertEqual(self.p['reviews'], old_review)
+        self.assertEqual(self.p['aggregation'], old_aggregation)
+        self.assertEqual(core.read(plan_file)['checks_passed'], False)
+        output = self.path.parent/'gaps-prompt.md'
+        with self.assertRaises(ValueError):
+            quality.finish_plan(self.p, self.path, 'G01', core.read(plan_file), output)
+        self.assertFalse(output.exists())
+        quality.finish_plan(self.p, self.path, 'G01', self.simulated_plan(), output)
+        self.assertEqual(output.read_text(encoding='utf8').count('【时长】1s。'), 3)
+        self.assertEqual({path: Path(path).read_bytes() for path in frozen}, frozen)
+
+    def test_prompt_source_reuses_reads_but_rechecks_each_operation(self):
+        self.ready(fails=['S02'], critical=True)
+        with patch.object(evidence_runtime, 'raw_sha', wraps=evidence_runtime.raw_sha) as hashes, \
+                patch.object(Image, 'open', wraps=Image.open) as decoded:
+            first = quality.source_request(self.p, self.path, 'G01')
+        originals = {str(Path(row['path']).resolve()) for row in self.p['storyboard_images'] + self.p['assets']}
+        for original in originals:
+            self.assertEqual(sum(str(Path(c.args[0]).resolve()) == original for c in hashes.call_args_list), 2)
+        for row in self.p['storyboard_images']:
+            self.assertEqual(sum(str(Path(c.args[0]).resolve()) == row['path'] for c in decoded.call_args_list), 1)
+        self.assertEqual(quality.source_request(self.p, self.path, 'G01'), first)
+        Image.new('RGB', (64, 36), 'red').save(self.p['storyboard_images'][0]['path'])
+        with self.assertRaisesRegex(ValueError, 'stale|Current group review'):
+            quality.source_request(self.p, self.path, 'G01')
+
+    def test_prepare_refreshes_only_style_and_finish_rejects_old_plan(self):
+        self.ready(fails=['S02'], critical=True)
+        old_plan = self.simulated_plan()
+        self.p['repair_asset_style']['assets'][0]['guidance'] += ' SIMULATED changed guidance'
+        core.save(self.path, self.p)
+        before = self.path.read_bytes()
+        output = self.path.parent/'old-plan.md'
+        with self.assertRaisesRegex(ValueError, 'stale'):
+            quality.finish_plan(self.p, self.path, 'G01', old_plan, output)
+        self.assertFalse(output.exists())
+        self.assertEqual(self.path.read_bytes(), before)
+        plan_file = self.path.parent/'style-plan.json'
+        with patch('sys.argv', ['repair_quality.py', 'prepare', str(self.path), 'G01', str(plan_file)]), \
+                patch('builtins.print'):
+            quality.main()
+        self.p = core.read(self.path)
+        self.assertEqual(core.read(plan_file)['source_fingerprint'], core.digest(
+            quality.source_request(self.p, self.path, 'G01')))
+        with self.assertRaisesRegex(ValueError, 'stale'):
+            quality.finish_plan(self.p, self.path, 'G01', old_plan, output)
+
+    def test_prepare_cannot_refresh_changed_evidence_or_modified_decision(self):
+        for kind in ('image', 'script', 'asset', 'decision'):
+            with self.subTest(kind=kind):
+                self.setUp()
+                self.ready(fails=['S02'], critical=True)
+                self.p['repair_asset_style']['assets'][0]['guidance'] += ' SIMULATED change'
+                if kind == 'image':
+                    Image.new('RGB', (64, 36), 'red').save(self.p['storyboard_images'][0]['path'])
+                elif kind == 'script':
+                    self.p['shots'][0]['script'] += 'SIMULATED changed script'
+                elif kind == 'asset':
+                    Image.new('RGB', (64, 36), 'red').save(self.p['assets'][0]['path'])
+                else:
+                    self.p['repair_decisions']['G01']['triggered'] = False
+                core.save(self.path, self.p)
+                before = self.path.read_bytes()
+                plan_file = self.path.parent/'blocked-plan.json'
+                with patch('sys.argv', ['repair_quality.py', 'prepare', str(self.path), 'G01', str(plan_file)]), \
+                        self.assertRaises(ValueError):
+                    quality.main()
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertFalse(list(plan_file.parent.glob('blocked-plan*')))
+
+    def test_prepare_and_finish_abort_inflight_same_size_replacement_before_writes(self):
+        for action in ('prepare', 'prepare-missing', 'finish'):
+            with self.subTest(action=action):
+                self.setUp()
+                self.ready(fails=['S02'], critical=True)
+                plan = self.simulated_plan()
+                if action == 'prepare-missing':
+                    self.p.pop('repair_asset_style')
+                core.save(self.path, self.p)
+                before = self.path.read_bytes()
+                original = Path(self.p['storyboard_images'][0]['path'])
+                stat = original.stat()
+                def replace(*args, **kwargs):
+                    payload = bytearray(original.read_bytes()); payload[-1] ^= 1
+                    original.write_bytes(payload)
+                    os.utime(original, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                output = self.path.parent/'changed.md'
+                if action == 'finish':
+                    compile_request = quality.compile_request
+                    def compile_and_replace(*args):
+                        result = compile_request(*args)
+                        replace()
+                        return result
+                    with patch.object(quality, 'compile_request', side_effect=compile_and_replace), \
+                            self.assertRaisesRegex(ValueError, 'Evidence changed'):
+                        quality.finish_plan(self.p, self.path, 'G01', plan, output)
+                else:
+                    compose = repair._compose_prompt
+                    def compose_and_replace(*args, **kwargs):
+                        try:
+                            return compose(*args, **kwargs)
+                        finally:
+                            replace()
+                    with patch.object(repair, '_compose_prompt', side_effect=compose_and_replace), \
+                            patch('sys.argv', ['repair_quality.py', 'prepare', str(self.path), 'G01', str(output)]), \
+                            self.assertRaisesRegex(ValueError, 'Evidence changed'):
+                        quality.main()
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertFalse(list(output.parent.glob('changed*')))
 
     def test_delivery_rejects_incorrect_cells_even_with_fresh_file_hashes(self):
         self.ready(uncertain=['S02'])

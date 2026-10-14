@@ -8,6 +8,12 @@ $python = if ($env:PYTHON) { $env:PYTHON } else { 'python' }
 if ($ImagesOnly) {
     & $python -m unittest discover -s $PSScriptRoot -p test_script_input.py -v
     if ($LASTEXITCODE -ne 0) { throw 'Script input tests failed' }
+    & $python -m unittest discover -s $PSScriptRoot -p test_storyboard_overviews.py -v
+    if ($LASTEXITCODE -ne 0) { throw 'Storyboard overview tests failed' }
+    & $python -m unittest discover -s $PSScriptRoot -p test_agent_context.py -v
+    if ($LASTEXITCODE -ne 0) { throw 'Agent context tests failed' }
+    & $python -m unittest discover -s $PSScriptRoot -p test_review_batches.py -v
+    if ($LASTEXITCODE -ne 0) { throw 'Batch review tests failed' }
     & $python -m unittest discover -s $PSScriptRoot -p test_storyboard_images.py -v
 } else {
     & $python -m unittest discover -s $PSScriptRoot -v

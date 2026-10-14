@@ -42,11 +42,21 @@ python scripts/prepare_storyboards.py prepare PROJECT.json --input INPUT.json --
 python scripts/prepare_storyboards.py prepare PROJECT.json --images IMAGES.json --run-dir PREPARE_INTERNAL --output DELIVERY
 ```
 
-省略 --images 使用已保存对应表；可选 --original-prompt PROMPT.txt 只记录文件路径，不打开或检查内容。prepare 在一次操作中验证全部图片、脚本要求和资产，建立基线，输出 CONTEXT.json 与 WORKLIST.json。目录须为新目录。输入失败不写入项目、不产生审查。原图和原资产缺少必要可见信息时，回到相应输入澄清，不能伪造证据。
+省略 --images 使用已保存对应表；可选 --original-prompt PROMPT.txt 只记录文件路径，不打开或检查内容。prepare 在一次操作中验证全部图片、脚本要求和资产，建立基线，输出 CONTEXT.json、REVIEW.view.json、WORKLIST.json、RUN.json 及 overviews/overview_NNN.png。阅读视图给出总览路径和各页镜号；WORKLIST.overview_manifest 绑定 overviews/OVERVIEWS.json。总览属于内部看图材料，交付仍保存全部原图。目录须为新目录。输入失败不写入项目、不产生审查。原图和原资产缺少必要可见信息时，回到相应输入澄清，不能伪造证据。
+
+总览默认每页9张、3×3，从左到右、从上到下严格沿用已确认镜序，不按文件名重排。超过9张自动分页，末页空位留白；按 EXIF 方向等比完整缩放，镜号放在图片外，不遮挡画面。分页与 Shot 分组无关，跨页相邻镜头仍检查连续性。
+
+## 字段速查
+
+正常执行只读独立的 [字段速查](fields.md)，无需展开整份接口说明。
 
 ## 一次整批审查
 
-先阅读 [精简图片规则](storyboard-review.md)、CONTEXT 中的原文、已解析要求、原资产和每镜原图，再集中填写 WORKLIST。工具校验结构和文件绑定，视觉结论必须来自实际看图。不得把自动生成的 uncertain 草稿当成已完成审查，也不得用色块测试结果证明实际人物识别能力。
+默认读取 prepare 返回的 review_batches 中的 overviews/REVIEW.pageNNN.json。每包含本页逐镜原文、完整要求、边界镜背景和相关原资产，images_to_open 可在同一工具调用中批量显示；原资产总览按9项上限分页，相同资产组合复用，少量资产不补空白行。原资产标签 Axx 对应 visual_label，放大原资产用 original_image_path。逐页包和资产总览同样受 OVERVIEWS.json 指纹绑定，改变即拒绝恢复与交付。旧包无新增字段仍兼容。
+
+完整 REVIEW.view.json 和 CONTEXT.json 留在磁盘供整体阅读或工具核验。所有视图保留逐镜脚本、要求及状态原文；requirements 中 {$ref:Rxx} 引用 shared_requirements，须完整展开理解。重复要求不反复写入每镜，原图和资产的哈希不打印到阅读视图；这不删改原始证据。RUN.json 记录准备目录、工作单及下一步，修改工作单时保留这些原始绑定。
+
+先阅读 [精简图片规则](storyboard-review.md) 和逐页审查包，批量显示相关图片，再集中填写 WORKLIST。总览中可辨认的逐镜项目直接判断；剧情必需细节看不清时集中放大对应原图，不默认逐张另开。工具校验结构和文件绑定，视觉结论必须来自实际看图。不得把自动生成的 uncertain 草稿当成已完成审查，也不得用色块测试结果证明实际人物识别能力。
 
 默认 WORKLIST 为版本 2，每镜显式填写七项 checks、verdict、reference_phase、observation.visible_facts 和 reference 取舍。可见事实记录一次，需足以支持身份、阶段和检查结论；工具复用这些事实填写 observation、identity_reason、phase_reason，必要时可显式覆盖说明。PASS 的 reason／interpretation 默认为“符合脚本”，不填写 followup；FAIL／uncertain 必须填 reason，uncertain 还须具体 followup，FAIL 的 issues 和 repair_assessments 继续完整。旧版工作单版本 1 原样兼容。阶段为 entry／action／exit／unknown；全镜动作来自 script 和 state_changes，静帧要求来自 keyframe。
 
@@ -60,7 +70,7 @@ python scripts/prepare_storyboards.py prepare PROJECT.json --images IMAGES.json 
 
 阶段未知不得 PASS；明显人物矛盾仍可 FAIL，即使动作阶段无法确定。不要为了让图片通过而改写脚本或要求。相邻图片只校对可见连续性，不能要求它们证明中间运动轨迹。七项检查中的动作／构图应按参考图适用范围判断，无法证明动态过程本身不构成 uncertain。
 
-工作单绑定一次准备时的 context_fingerprint。原图证据包含 path、sha256、observation、visible_facts、interpretation；工具展开时附回原绑定。完整审查采用 review_schema=6、reference_policy_version=5、source_kind=provided、source_fingerprint。不得填写视频时间、视频 SHA256、映射或 absent。全批 checks 为 shot／continuity／story；boundary_checks 为空，相邻图的可见连续性写入逐镜检查。
+工作单绑定一次准备时的 context_fingerprint；有 overview_manifest 时还检查总览清单、各页哈希及逐镜原图对应，变化须重新准备。旧工作单无该字段仍兼容。原图证据包含 path、sha256、observation、visible_facts、interpretation；工具展开时附回原绑定。完整审查采用 review_schema=6、reference_policy_version=5、source_kind=provided、source_fingerprint。不得填写视频时间、视频 SHA256、映射或 absent。全批 checks 为 shot／continuity／story；boundary_checks 为空，相邻图的可见连续性写入逐镜检查。
 
 涉及原资产的判断继续填写 asset_comparisons 的镜号、资产 ID、aspect、decision 和实际观察／剧情依据；版本 2 自动补齐遗漏的 asset_sha256、同镜 evidence_refs、空辅助数组及 PASS 的空 followup。已填写的绑定不被覆盖，错误绑定仍被拒绝。只有 FAIL 镜头填写 repair_assessments。issues 填镜号、可见问题、expected、actual、fix 等原有语义字段，程序补同镜 evidence 和固定 repair_target=storyboard_image，不使用 time_range。返修字段详见 [返修依据](repair-assessments.md)。
 
@@ -86,8 +96,22 @@ complete 在同一锁和证据周期内恢复完整审查、核验、记录、�
 
 未达阈值时不读取或分析原生成提示词，也不准备新提示词。只有路径保存在内部 deferred_storyboard_prompts；显式 API 文本同样延后登记，不进入审查上下文。触发后才读取原文，保存在 source_storyboard_prompts 并冻结来源，后续筛选复用该原文。文件缺失、编码错误或筛选缺项只影响提示词准备，审查报告正常完成；尚未读成功的文件可补齐后在提示词准备阶段继续读取。
 
-达到阈值后输出整批所有镜头的新视频提示词，用户自行生成。complete 若来源就绪，会同时写入 PROMPT.source.json、PROMPT.view.json、PROMPT.json；代理阅读视图，集中核对／修改精简计划，再用 repair_quality.py finish 导出。若缺资产风格、旧提示词筛选、纯视觉转换或混用画幅的目标，报告先正常完成，FINISH_REPORT 标 prompt_status=needs_preparation 并给出缺项。补齐后重新 decide，再 repair_quality.py prepare／finish，不重做仍有效的视觉判断。原提示词已登记后如主动修改须重新 register 并筛选，不能当作当前来源自动替换已冻结原文。
+达到阈值后输出整批所有镜头的新视频提示词，用户自行生成。complete 若来源就绪，会同时写入 PROMPT.source.json、PROMPT.view.json、PROMPT.json；代理阅读视图，集中核对／修改精简计划，再用 repair_quality.py finish 导出。若缺资产风格、旧提示词筛选、纯视觉转换或混用画幅的目标，报告先正常完成，FINISH_REPORT 标 prompt_status=needs_preparation，一次汇总缺项并给出 prompt_inputs 路径。PROMPT.inputs.json 保留原资产路径／SHA、需转换原文／SHA、旧提示词来源及画幅；代理据此同批补齐项目字段，再直接 repair_quality.py prepare／finish，不单独 decide 或重做仍有效的视觉判断。prepare 只刷新风格准备变化，其他证据变化须重新核验。原提示词已登记后如主动修改须重新 register 并筛选，不能当作当前来源自动替换已冻结原文。
 
 原资产对应、逐镜内容、每镜一秒和静音要求保持。所有图片共同画幅直接沿用；混用时导出前确定 storyboard_target_aspect（或 complete --target-aspect 宽:高），不自动裁图。旧提示词保存在 source_storyboard_prompts，绑定 source_fingerprint；repair_prompt_references 的来源字段也使用 source_fingerprint，其他筛选规则不变。它仅提供与脚本相容的视觉建议，不充当图像审查证据。
 
 编排计划绑定完整来源；原资产、图片、脚本、目标画幅、原提示词或其筛选变化后必须重新准备并核验计划。项目到提示词导出停止，由用户自行生成。
+
+## 压缩或中断后的恢复
+
+每页实际看图后保存工作单，不能只把观察放在聊天里。任务摘要只需 RUN.json 的绝对路径、当前阶段和下一步。恢复时不通读 PROJECT、CONTEXT、源码或冻结交付清单，不重新 extract／prepare：
+
+```text
+python scripts/prepare_storyboards.py resume PROJECT.json PREPARE_INTERNAL
+python scripts/prepare_storyboards.py resume PROJECT.json PREPARE_INTERNAL --page 2
+python scripts/prepare_storyboards.py resume PROJECT.json PREPARE_INTERNAL --shots S06
+```
+
+默认输出字段进度及视图路径；--page 返回一页审查包与已存记录，--shots 返回选定镜头及左右相邻镜头的当前原文、状态、原图路径、保存的判断与问题，保留整批分组背景和相关资产。两者不能同时使用，detail_queue 只含所选镜号中已有实际记录的待核查项，默认未看草稿不入队。涉及远处省图依据时显式补读相应镜号。恢复入口重新校验原图、脚本、资产、总览绑定及已保存上下文；来源改变即停止。记录存在不代表实际审查已经完成，更不代表 PASS。工具不自动补结论，complete 仍作全部质量校验。旧准备目录没有 REVIEW.view 时兼容 CONTEXT，也可用 --shots 得到精简视图。
+
+prepare／complete 默认打印简报；complete 另保存 FINISH.view.json，压缩后只读此简报接着处理。完整 FINISH_REPORT、指纹及冻结文件清单照常保存。仅诊断需要时使用 --detailed。完成后的提示词阶段以简报的 prompt_status、prompt_plan／prompt_inputs 继续；不因压缩重跑仍有效的 complete。

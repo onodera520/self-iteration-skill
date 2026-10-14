@@ -10,6 +10,11 @@ from evidence_runtime import verified_read
 from previs import (read, save, locked, validate, require, number, digest, resolve,
                     group_fingerprint, review_current)
 
+# Unconfirmed facts/changes remain warnings; only contradictory states block planning.
+STATE_CONFLICTS = frozenset({
+    "baseline_conflict", "change_start_conflict", "unexplained_after_state",
+})
+
 RULES = {
     "FIRST_IN_GROUP": "每组首镜提供进入条件",
     "LAST_IN_GROUP": "组尾保留锚点，使补足镜头位于同组两锚点之间",

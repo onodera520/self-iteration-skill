@@ -126,6 +126,28 @@ def current_decision(p, project, gid):
     return d
 
 
+def refresh_prompt_style(p, project, gid):
+    """Prepare may refresh style-only bindings; changed review evidence still stops.
+
+    Style is supplied after the threshold is known. Updating that preparation
+    data does not change image judgments or the set of allowed corrections.
+    Finish never calls this helper and continues to reject stale plans.
+    """
+    d = p.get('repair_decisions', {}).get(gid)
+    if not d:
+        return False
+    core.require(d.get('fingerprint') == core.digest({k: v for k, v in d.items() if k not in DECISION_STATE}),
+                 'Repair decision was modified')
+    fresh = binding(p, project, gid)
+    if d['binding'] == fresh:
+        return False
+    core.require({k: v for k, v in d['binding'].items() if k != 'style_fingerprint'} ==
+                 {k: v for k, v in fresh.items() if k != 'style_fingerprint'},
+                 'Repair decision stale; re-evaluate changed inputs')
+    decide(p, project, gid)
+    return True
+
+
 def asset_style(p, assets):
     """Agent supplies grounded observations once; tool binds them to original assets."""
     from validation import Report, style_shape
@@ -158,10 +180,19 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
     core.require(version == 5, 'Only current source and audited prompt formats are supported')
     d = current_decision(p, project, gid) if stored_decision is None else stored_decision
     core.require(d['triggered'], 'Repair threshold not reached')
+    preparation_errors = []
+
+    def prepare_value(fn):
+        try:
+            return fn()
+        except (ValueError, OSError, UnicodeError) as exc:
+            preparation_errors.append(str(exc))
+            return None
+
     if (stored_decision is None and reference_snapshot is _CURRENT_REFERENCE
             and gid in p.get('deferred_storyboard_prompts', {})):
         from prepare_storyboards import load_original_prompt
-        load_original_prompt(p, project, gid)
+        prepare_value(lambda: load_original_prompt(p, project, gid))
     from requirements import contexts
     resolved = contexts(p)
     original = {s['shot_id']: s for s in baseline(p)['shots']}
@@ -172,14 +203,15 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
     visual = repair_prompt.VisualOnly(p.get('repair_visual_adaptations', {}))
     reference, guidance = None, {}
     reference = repair_reference.current(p, gid) if reference_snapshot is _CURRENT_REFERENCE else reference_snapshot
-    guidance = repair_reference.validate(reference, d['binding'], original, [s['id'] for s in ss])
+    guidance = prepare_value(lambda: repair_reference.validate(reference, d['binding'], original,
+                             [s['id'] for s in ss])) or {}
     def render_text(path, text):
         return visual.text(path, text) if visual else text
     assets = d['binding']['assets']
-    style = asset_style(p, assets)
+    style = prepare_value(lambda: asset_style(p, assets))
     descriptions = {a['id']: a.get('description', '') for a in p['assets']}
     from storyboard_inputs import source_aspect
-    shape = source_aspect(p, project, d['binding']['source_fingerprint']) if input_aspect else None
+    shape = prepare_value(lambda: source_aspect(p, project, d['binding']['source_fingerprint'])) if input_aspect else None
     aspect = shape['aspect_ratio'] if shape else p['config'].get('aspect_ratio', '')
     lines = ['按下列完整脚本生成视频，保留镜号、镜序、剧情及必要切镜。',
              '资产图顺序：' + '；'.join(f"图{i}: {a['id']} {render_text('asset.' + a['id'] + '.description', descriptions[a['id']])}" for i, a in enumerate(assets, 1)),
@@ -258,10 +290,31 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
                   '以下为本次需修正的镜头，必须各自单独成一个硬切镜头，不得省略、不得与相邻镜合并：'
                   + '、'.join(f"镜头{i}={sid}" for i, sid in corrections)]
     lines += ['【原始资产风格】', '以下风格仅约束视觉表现，不改变原脚本人物关系、动作、场景与时空；资产展示背景不替代剧情背景。']
-    lines.extend(f"图{i}（{row['asset_id']}）：{render_text('asset.' + row['asset_id'] + '.guidance', row['guidance'])}" for i, row in enumerate(style['assets'], 1))
+    if style:
+        lines.extend(f"图{i}（{row['asset_id']}）：{render_text('asset.' + row['asset_id'] + '.guidance', row['guidance'])}" for i, row in enumerate(style['assets'], 1))
     if visual:
-        visual.finish()
+        preparation_errors.extend(visual.errors)
         lines.append(repair_prompt.SILENT_DIRECTIVE)
+    if preparation_errors:
+        # Internal work data only: no guessed style or automatic semantic approval.
+        inputs = dict(input_preparation_version=1, source_group_id=gid,
+            errors=preparation_errors,
+            source_fingerprint=d['binding']['source_fingerprint'],
+            script_fingerprint=d['binding']['script_fingerprint'],
+            assets=[dict(a, description=descriptions[a['id']]) for a in assets],
+            repair_asset_style=copy.deepcopy(p.get('repair_asset_style')) or dict(preserves_story=False,
+                assets=[dict(asset_id=a['id'], sha256=a['sha256'], visible_style_facts=[], guidance='') for a in assets]),
+            visual_sources=visual.source_fields,
+            repair_visual_adaptations=copy.deepcopy(p.get('repair_visual_adaptations', {})))
+        if reference is not None:
+            inputs['original_prompt'] = copy.deepcopy(reference)
+        if gid in p.get('deferred_storyboard_prompts', {}):
+            inputs['deferred_original_prompt'] = copy.deepcopy(p['deferred_storyboard_prompts'][gid])
+        if input_aspect:
+            from storyboard_inputs import inputs as image_inputs
+            inputs['input_ratios'] = list(dict.fromkeys(row['aspect_ratio'] for row in image_inputs(p, project)))
+            inputs['storyboard_target_aspect'] = p.get('storyboard_target_aspect')
+        raise repair_prompt.PreparationError(preparation_errors, inputs)
     seconds = len(ss)
     result = dict(source_group_id=gid,
                 decision_fingerprint=d['fingerprint'], binding=copy.deepcopy(d['binding']),

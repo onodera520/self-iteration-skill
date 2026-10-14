@@ -4,7 +4,29 @@
 
 ## 一次看图，一次记录
 
-先读该镜脚本、已解析要求、相关原资产和对应原图，判断是否符合该镜脚本、适合作为生成参考。每镜显式完成 identity、scene、props、composition、action、continuity、cleanliness 七项检查，以及参考阶段、结论和图片取舍。逐镜 visible_facts 只写一次，需支持人物、阶段及相关判断；程序复用到内部观察和理由。有必要时另写针对性说明。
+先读 prepare 返回的 review_batches 对应的 REVIEW.pageNNN.json，不先通读整批 REVIEW.view.json。每包保留该页9镜的原脚本和完整要求、前后边界镜头背景及明确关联的原资产。images_to_open 列出本页编号总览、相关资产总览和必要的上一页末镜原图。资产总览 Axx 与 assets.visual_label 一一对应，不是分镜图；原资产放大路径为 original_image_path。旧准备目录没有逐页包时使用 REVIEW.view.json。
+
+同一工具调用批量打开这些图，以原始显示尺寸查看；不把更多分镜挤成更小缩略图。先按本页镜序一次判断所有清楚项目，再把看不清的关键手部、持物、倒影或空间细节收成一批，集中打开对应原图。明确可见的矛盾直接记录，不因有错就重复整批看图。相同且未变的资产在当前未压缩审查段内看一次即可；压缩后恢复时重新显示相关资产。后页核对前页末镜到本页首镜的连续性；包中的相邻镜号不算已完成审查。
+
+判断是否符合该镜脚本、适合作为生成参考，每镜显式完成 identity、scene、props、composition、key_state、continuity、cleanliness 七项检查，以及参考阶段、结论和图片取舍。共同场景或资产可一起核对，但不能由同页其他图通过就推定本图通过。逐镜 visible_facts 只写一次，需支持人物、阶段及相关判断；程序复用到内部观察和理由。每页实际观察和判断及时保存到 WORKLIST；压缩后先 resume --page 页码验证绑定，detail_queue 只列已有实际记录中的待核查项，不把未看草稿当成复查任务。
+
+在 Codex 工具层，一次 functions.exec 可读取审查包，再并发加载图片，按原顺序显示（替换为真实绝对路径，不执行本示例占位符）：
+
+```javascript
+const r = await tools.exec_command({cmd: "Get-Content -Raw -LiteralPath 'ABS_BATCH_JSON'", max_output_tokens: 12000});
+if (r.exit_code !== 0) throw new Error(r.output);
+const view = JSON.parse(r.output);
+text(view);
+const targets = view.images_to_open;
+const loaded = await Promise.allSettled(targets.map(t => tools.view_image({path: t.path, detail: "original"})));
+for (let i = 0; i < loaded.length; i++) {
+  if (loaded[i].status !== "fulfilled") throw new Error("图片加载失败：" + targets[i].path);
+  text(targets[i]);
+  image(loaded[i].value.image_url, "original");
+}
+```
+
+已实际看过且本段未变的资产可以从 targets 中省去；其余图片仍按顺序显示。局部复查同样一次加载全部需放大的原图，不逐镜重复读规则、上下文或整批资产。工具并发加载只减少等待，视觉结论仍逐镜产生。
 
 | 结论 | 标准与记录 |
 | --- | --- |
@@ -13,6 +35,18 @@
 | uncertain | 剧情必需的信息看不清或阶段不能确定。先放大原图或集中澄清，未解决时保留“—／暂不省图”，写具体需确认的信息。 |
 
 不由空字段、文件名、模板或工具成功推定 PASS。输入数量、镜号对应、文件打不开属于输入问题，不计剧情错误。不要为让图片通过改写脚本要求。
+
+## 过程帧与完成帧
+
+参考图可以呈现动作或转场的入口、中间过程或完成状态。先根据可见事实与上下文判断阶段，再检查该阶段的必要关系；不能把完整镜头的最终结果当成每一张参考静帧的必需条件。脚本中的“填满、消失、交给、站稳”等结果描述本身，不构成用户明确要求选择完成帧。
+
+对渐白、渐隐、溶解、遮挡、变形、交接等过程，只要画面是该过程合理的可见阶段，人物、对象及因果关系成立，且不破坏剧情，允许原人物、场景或前一状态暂时残留，按 entry 或 action 判 PASS。无需为“还没完成”单独要求确认、降为 uncertain 或提出返修；同时不能声称一张图已经验证完整运动。
+
+仅当用户明确指定完成帧／最终状态、关键剧情要求此时已经完成，或图中出现与任何合理阶段都矛盾的身份、对象、方向、空间及因果关系时，才以对应要求判 FAIL。必要关系看不清或阶段确实无法确定，先放大；仍无法判断才 uncertain。不能凭“可以继续动”放过真正的剧情矛盾。
+
+例如白光正在吞没房间时，人脸和室内轮廓仍可辨，作为渐白过程帧应通过；用户明确要求“最后一帧必须纯白，不能有轮廓”时，同一张图才不符合。钥匙交接中双方短暂接触同一把钥匙可通过；明确交接完成后仍由错误角色持有则不符合。
+
+若冲突来自代理把最终结果误提取为所有阶段的 must_have，按[镜头要求](shot-requirements.md#整理阶段的要求前置自检)修正阶段及要求版本、更新来源并重建受影响上下文；保留原脚本和完整结果。不能把提取错误变成图片问题，也不能沿用失效的证据绑定直接放行。
 
 ## 参考阶段与剧情约束
 

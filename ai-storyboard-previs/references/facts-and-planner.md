@@ -2,7 +2,7 @@
 
 事实和省图约束与 [镜头要求](shot-requirements.md)、[分组规则](planning.md)一起使用。新项目一次整理全部镜头；complete 在当前审查后自动运行规划，无需另调用。
 
-facts 记录 entity、attribute、value、status、critical、phase 与 source。entity 使用已声明资产、scene 或 continuity 实体；status 为 known／unknown，phase 为 static／before／after，source.kind 为 script／asset／inference，并说明出处。不把推断升级为脚本事实。
+facts 记录 entity、attribute、value、status、critical、phase 与 source。entity 必须精确匹配 assets[].id（包括已有场景资产）；不能直接填 continuity_id 或虚构资产。未对应原资产的叙事约束放 requirements 并绑定 provenance。status 为 known／unknown，phase 为 static／before／after，source.kind 为 script／asset／inference，并说明出处。不把推断升级为脚本事实。
 
 只用 requirements.entry_state 补尚未定义的持久状态种子，沿同 continuity_id 的 inherits_from 继承出口；state_changes 记录有来源且 authorized 的 before／after 变化。before 必须吻合入口；临时姿态放 keyframe，不另写出口快照。关键事实与变化须有剧情依据。
 

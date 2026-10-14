@@ -57,10 +57,9 @@ prepare --original-prompt 只记路径，达到阈值才读取并登记 source_s
 
 ## 默认导出与交付
 
-审查报告先冻结。complete 已生成 PROMPT.view.json／PROMPT.json 就直接填写；缺项补齐后重新 decide，再准备一次：
+审查报告先冻结。complete 已生成 PROMPT.view.json／PROMPT.json 就直接填写；否则按 FINISH_REPORT.prompt_inputs 的内部准备清单同批补齐，不轮流试错。再直接准备一次，由 prepare 核验并刷新仅风格造成的绑定变化：
 
 ```text
-python scripts/repair_cycle.py decide PROJECT.json G01
 python scripts/repair_quality.py prepare PROJECT.json G01 PROMPT_INTERNAL/PROMPT.json
 python scripts/repair_quality.py finish PROJECT.json G01 PROMPT_INTERNAL/PROMPT.json --output PROMPT_DELIVERY/G01_新视频提示词.md
 ```

@@ -33,6 +33,13 @@ def finish(errors):
         raise ValueError('Repair prompt validation failed:\n' + '\n'.join(errors))
 
 
+class PreparationError(ValueError):
+    """All independent preparation gaps plus source-bound data for one batch fix."""
+    def __init__(self, errors, inputs):
+        self.inputs = inputs
+        super().__init__('Repair prompt preparation failed:\n' + '\n'.join(errors))
+
+
 def speech_signals(text):
     """Ignore explicit prohibitions, never delete whole clauses or alter actions."""
     return list(dict.fromkeys(m.group() for m in SPEECH.finditer(NEGATIVE.sub('', text))))
@@ -42,7 +49,7 @@ class VisualOnly:
     """Collect all fields needing an agent-supplied, source-bound visual adaptation."""
     def __init__(self, adaptations):
         self.source = adaptations
-        self.used, self.errors = {}, []
+        self.used, self.errors, self.source_fields = {}, [], {}
         if not isinstance(adaptations, dict):
             self.source = {}
             self.errors.append('repair_visual_adaptations must be an object')
@@ -54,6 +61,8 @@ class VisualOnly:
             if row is not None:
                 self.errors.append(f'{path}: visual-only source must remain unchanged')
             return source
+        self.source_fields[path] = dict(source_text=source,
+            source_sha256=hashlib.sha256(source.encode('utf-8')).hexdigest(), signals=signals)
         if not isinstance(row, dict):
             self.errors.append(f'{path}: visual adaptation required for {signals}; preserve existing actions/plot, do not simply delete dialogue')
             return source
