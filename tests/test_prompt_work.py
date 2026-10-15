@@ -3,6 +3,7 @@ import contextlib
 import copy
 import io
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,7 +41,8 @@ class PromptWorkTests(fixtures.Base):
         return result
 
     def filled(self, result):
-        work, view = core.read(result['prompt_work']), core.read(result['prompt_work_view'])
+        view = core.read(result['prompt_work_view'])
+        work = copy.deepcopy(view['submission_template'])
         prep = work['preparation']
         for row in prep.get('assets', {}).values():
             row.update(visible_style_facts=['SIMULATED solid-colour reference'], guidance='SIMULATED original style')
@@ -83,9 +85,14 @@ class PromptWorkTests(fixtures.Base):
         core.save(result['prompt_work'], work)
         argv = ['repair_quality.py', 'finish', str(self.path), 'G01', result['prompt_work'],
                 '--output', result['prompt_output']]
-        with patch('sys.argv', argv), contextlib.redirect_stdout(io.StringIO()), \
+        before_export = datetime.now(timezone.utc)
+        with patch('sys.argv', argv), contextlib.redirect_stdout(io.StringIO()) as cli_output, \
                 patch.object(quality, 'source_request', wraps=quality.source_request) as sources:
             quality.main()
+        completed_line = next(line for line in cli_output.getvalue().splitlines() if line.startswith('Export completed at (UTC): '))
+        completed = datetime.fromisoformat(completed_line.split(': ', 1)[1])
+        self.assertLessEqual(before_export, completed)
+        self.assertLessEqual(completed, datetime.now(timezone.utc))
         self.assertEqual(sources.call_count, 2)  # One packet check and one prepared request, no prepare command.
         saved = core.read(self.path)
         self.assertEqual(saved['reviews'], old['reviews'])
@@ -100,6 +107,60 @@ class PromptWorkTests(fixtures.Base):
         request = core.read(saved['repair_prompt_exports']['G01'][0]['request_path'])
         self.assertEqual(request['prompt_plan']['plan_version'], 3)
         self.assertTrue(all(a['sha256'] for a in request['asset_style']['assets']))
+
+    def test_reference_guide_and_template_are_sufficient_for_one_successful_submission(self):
+        result = self.complete(missing=True)
+        view = core.read(result['prompt_work_view'])
+        work = self.filled(result)
+        guide = view['reference_instructions']
+        self.assertEqual(set(guide['selection']), {'shot_id', 'source_quote', 'script_quote', 'visual_text'})
+        self.assertEqual(set(guide['exclusion']), {'source_quote', 'reason'})
+        self.assertEqual(view['submission_template']['preparation']['reference']['excluded'], [])
+        with patch.object(quality, 'source_request', wraps=quality.source_request) as sources:
+            record, saved = prompt_work.finish(self.p, self.path, 'G01', work, result['prompt_output'])
+        self.assertEqual(sources.call_count, 2)
+        self.assertTrue(Path(record['path']).exists())
+        self.assertEqual(len(saved['repair_prompt_references']['G01']['excluded']), 1)
+
+    def test_empty_reference_decision_is_rejected_before_source_rebuild_or_output(self):
+        result = self.complete(missing=True)
+        work = self.filled(result)
+        work['preparation']['reference'].update(selections=[], excluded=[])
+        before = self.path.read_bytes()
+        with patch.object(quality, 'source_request') as source, self.assertRaises(ValueError) as caught:
+            prompt_work.finish(self.p, self.path, 'G01', work, result['prompt_output'])
+        self.assertIn('preparation.reference', str(caught.exception))
+        self.assertIn('reference_instructions', str(caught.exception))
+        self.assertIn('selections', str(caught.exception))
+        source.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse(Path(result['prompt_output']).exists())
+
+    def test_incomplete_selection_collects_required_quote_fields_in_one_preflight(self):
+        result = self.complete(missing=True)
+        work = self.filled(result)
+        work['preparation']['reference'].update(selections=[dict(shot_id='S01')], excluded=[])
+        with patch.object(quality, 'source_request') as source, self.assertRaises(ValueError) as caught:
+            prompt_work.finish(self.p, self.path, 'G01', work, result['prompt_output'])
+        for field in ('source_quote', 'script_quote', 'visual_text'):
+            self.assertIn(field, str(caught.exception))
+        source.assert_not_called()
+        self.assertFalse(Path(result['prompt_output']).exists())
+
+    def test_reference_preflight_keeps_same_shot_quotes_and_silent_visual_rules(self):
+        result = self.complete(missing=True)
+        good = self.filled(result)
+        for field, value in [('shot_id', 'S99'), ('source_quote', 'not in original'),
+                             ('script_quote', 'not in script'), ('visual_text', '人物开口说话。')]:
+            work = copy.deepcopy(good)
+            selection = dict(shot_id='S01', source_quote='SIMULATED old lighting',
+                script_quote=self.p['shots'][0]['script'], visual_text='女孩在门旁持钥匙')
+            selection[field] = value
+            work['preparation']['reference'].update(selections=[selection], excluded=[])
+            with self.subTest(field=field), patch.object(quality, 'source_request') as source, self.assertRaises(ValueError):
+                prompt_work.finish(self.p, self.path, 'G01', work, result['prompt_output'])
+            source.assert_not_called()
+        self.assertFalse(Path(result['prompt_output']).exists())
 
     def test_ready_work_uses_single_source_build_and_rejects_unapproved_work(self):
         result = self.complete()

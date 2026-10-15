@@ -69,12 +69,37 @@ def packet(p, project, gid, source=None, inputs=None):
                                  if path in visual_text}
     if reference is not None and 'reference' in preparation:
         view['original_prompt'] = reference['source']['text']
+        view['reference_instructions'] = repair_reference.editing_guide()
     if inputs and inputs.get('deferred_original_prompt'):
         view['unavailable_original_prompt'] = inputs['deferred_original_prompt']
-    view['next_action'] = ('Read this batch once. Fill only preparation and plan in the work file, then finish. '
+    view['submission_template'] = copy.deepcopy(work)
+    view['next_action'] = ('Read this batch once. Copy submission_template, fill only preparation and plan, '
+        'save it to PROMPT.work.json, then finish. For original-prompt selections/exclusions use reference_instructions. '
         'Four grouped judgments cover all nine checks. Notes are optional for real ambiguities; '
         'do not copy each edit or unchanged source into a second explanation. Never approve blank judgments.')
     return dict(work=work, view=view)
+
+
+def preflight_reference(p, gid, work):
+    """Reject incomplete selections before rebuilding image evidence or writing output."""
+    preparation = work.get('preparation') if isinstance(work, dict) else None
+    if not isinstance(preparation, dict) or 'reference' not in preparation:
+        return
+    import repair_cycle as repair
+    import repair_reference
+    try:
+        fields = preparation['reference']
+        core.require(isinstance(fields, dict) and set(fields) == {'compatibility_reason', 'selections', 'excluded'},
+                     'reference 只含 compatibility_reason、selections、excluded')
+        source = p.get('source_storyboard_prompts', {}).get(gid)
+        core.require(isinstance(source, dict), '尚无已登记的原提示词；请核对当前 preparation 字段')
+        originals = {s['shot_id']: s for s in repair.baseline(p)['shots']}
+        group = next((g for g in p['groups'] if g['id'] == gid), None)
+        core.require(group is not None, '原提示词筛选须引用当前来源组')
+        repair_reference.validate_fields(source['text'], fields, originals, group['shot_ids'])
+    except ValueError as exc:
+        raise ValueError('preparation.reference 预检未通过。按现有 PROMPT.work.view.json 的 '
+                         'reference_instructions 修正下列字段后直接 finish，无需重做审查或搜索源码。\n' + str(exc)) from None
 
 
 def _apply(p, gid, work, current, inputs):
@@ -125,6 +150,7 @@ def finish(p, project, gid, work, output):
     from repair_export import check_output, _export_request
     working = copy.deepcopy(p)
     check_output(working, output)
+    preflight_reference(working, gid, work)
     with evidence_operation():
         inputs = None
         try:

@@ -58,8 +58,12 @@ def attention_shots(request):
         retained = '\n'.join(_normalized(value) for value in
                              [block['generation_text'], block['design'],
                               *block.get('must_have', []), *block.get('must_not_have', [])])
+        # A mechanically joined target repeats the same explicit requirements.
+        # This is exact text deduplication, never a semantic equivalence guess.
+        repeated_target = _normalized('；'.join(block.get('must_have', [])))
         extra = [value for path, value in sources(block).items()
-                 if path != 'generation_text' and not path.startswith(('must_have.', 'must_not_have.'))]
+                 if path != 'generation_text' and not path.startswith(('must_have.', 'must_not_have.'))
+                 and not (path == 'keyframe_target.description' and _normalized(value) == repeated_target)]
         if any(_normalized(value) not in retained for value in extra):
             result.append(block['shot_id'])
     return result
@@ -326,7 +330,10 @@ def main():
             else:
                 record = finish_plan(p, args.project, args.group, data, args.output)
             core.save(args.project, p)
+            from review_timing import utc_now
+            completed_at = utc_now()
             print('Audited prompt exported: ' + record['path'])
+            print('Export completed at (UTC): ' + completed_at)
             return
         plan_file = Path(args.plan_file)
         source_file = plan_file.with_name(plan_file.stem + '.source.json')

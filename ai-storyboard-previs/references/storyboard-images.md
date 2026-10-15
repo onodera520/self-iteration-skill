@@ -1,10 +1,20 @@
-# 已配对分镜图：默认入口
+# 已配对分镜图：统一入口及原接口
 
 用户提供已按脚本顺序配对的分镜图、完整脚本和角色／场景／道具原资产；可选 Shot 分组及原生成提示词继续保留。以下文件与字段全部由代理维护，不让用户登记。
 
+## 统一登记与一次填写
+
+普通保留图新任务优先使用 SKILL 中的 `review_storyboards.py start/submit`。start 一次接收原始材料，自动建立 SESSION 和 REVIEW；代理只填写 REVIEW 的语义字段。submit 生成 INPUT、OBSERVATIONS 与版本4 WORKLIST，并调用下述 prepare/complete。单个 `phase` 默认用于目标阶段及实际参考阶段；实际无法确定时用 unknown，并另填计划 keyframe_phase。共用场景、连续段、intent 可显式填在 defaults，每镜可覆盖。原文、时长、路径、镜序、资产与分组字段不可改写，来源或已提交判断变化后另建审查。
+
+`--images-dir` 仅按完整、唯一的纯数字／S镜号／镜头N文件名绑定；文件名不明确时使用 `--images` 有序 JSON。`--asset character=路径` 等重复登记，ID 按输入顺序生成 A01 等，文件名只作为原始描述，不推断实际身份或剧情。`--groups` 接受 JSON 数组或 `shot1：1、2、3` 行，必须按原序完整覆盖一次；范围等其他格式须先明确整理。`--original-prompt` 延迟到阈值触发后读取。
+
+字段预检失败在 REVIEW 修复后再次提交；准备阶段成功后若收尾异常，可用 prepare/RUN.json 和原 resume 接口定位，不能覆盖冻结的旧交付。相同提交在成功后只核验已有结果，不重跑审查。显式状态建模、资产对照、省图及旧项目继续使用下面的原接口。
+
 ## 首看拼图
 
-新任务先走独立入口，只读原脚本与用户确认的图片对应，不等 facts、requirements、intent 或原资产整理：
+统一入口只把 `purpose` 用作剧情目的和 required_result。目标画面描述默认复用同镜 `must_have` 的具体可见要求；有额外阶段说明时显式填写 keyframe_description，无必要要求列表时也须明确该描述。工具不再把“建立悬念”等抽象目的当成额外画面指令。
+
+需要原接口的任务先走独立入口，只读原脚本与用户确认的图片对应，不等 facts、requirements、intent 或原资产整理：
 
 ```text
 python scripts/prepare_storyboards.py overview SCRIPT.txt --images IMAGES.json --output FIRST_LOOK_INTERNAL --delivery DELIVERY
@@ -16,7 +26,7 @@ python scripts/prepare_storyboards.py overview SCRIPT.txt --images IMAGES.json -
 
 ## 整批准备
 
-新项目默认按 SKILL 内约定补齐首看 input_draft，使用 input_version=1；手工建普通输入才查 [普通输入模板](../assets/storyboard-input-minimal.json)，需要状态建模才查 [状态交接模板](../assets/storyboard-input.json)。已有项目沿用原字段，完整格式仅在需要时查 [项目模板](../assets/storyboard-project.json)。逐镜 script 和 source_script 保留原文；duration 使用脚本计划秒数，并填写 duration_source。缺失时才提出有明确来源的建议时长，不把示例或推断当作用户事实。
+使用原接口的新项目补齐首看 input_draft，使用 input_version=1；手工建普通输入才查 [普通输入模板](../assets/storyboard-input-minimal.json)，需要状态建模才查 [状态交接模板](../assets/storyboard-input.json)。已有项目沿用原字段，完整格式仅在需要时查 [项目模板](../assets/storyboard-project.json)。逐镜 script 和 source_script 保留原文；duration 使用脚本计划秒数，并填写 duration_source。缺失时才提出有明确来源的建议时长，不把示例或推断当作用户事实。
 
 原脚本有行首“镜头N”及依次排列的【时长】【镜头设计】【镜头内容】时，overview 和 extract 共用固定提取器，不临时编写正则或把非空行数当镜头数。需要单独提取而不出拼图时用原入口：
 

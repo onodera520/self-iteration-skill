@@ -10,6 +10,8 @@ if ($ImagesOnly) {
     if ($LASTEXITCODE -ne 0) { throw 'Script input tests failed' }
     & $python -m unittest discover -s $PSScriptRoot -p test_initial_overviews.py -v
     if ($LASTEXITCODE -ne 0) { throw 'Initial overview tests failed' }
+    & $python -m unittest discover -s $PSScriptRoot -p test_review_storyboards.py -v
+    if ($LASTEXITCODE -ne 0) { throw 'Unified storyboard entry tests failed' }
     & $python -m unittest discover -s $PSScriptRoot -p test_storyboard_overviews.py -v
     if ($LASTEXITCODE -ne 0) { throw 'Storyboard overview tests failed' }
     & $python -m unittest discover -s $PSScriptRoot -p test_agent_context.py -v

@@ -24,6 +24,17 @@ def current(p, gid):
     return dict(source=copy.deepcopy(source), assessment=copy.deepcopy(p.get('repair_prompt_references', {}).get(gid)))
 
 
+def editing_guide():
+    """The exact editable fields, shown where the agent fills the submission."""
+    return dict(
+        rule='compatibility_reason 只是总判断；selections 或 excluded 至少明确填写一条，不能两者都空。',
+        selection=dict(shot_id='本组镜号，例如 S01', source_quote='从 original_prompt 逐字摘录',
+                       script_quote='从该镜脚本逐字摘录', visual_text='与脚本相容的纯视觉细节，不含说话或新增剧情'),
+        exclusion=dict(source_quote='从 original_prompt 逐字摘录', reason='说明为什么排除这段，如声音指令、重复或不符脚本'),
+        no_selection='没有需要额外采用的内容时 selections=[]，仍须在 excluded 写实际引文与具体理由。',
+        ownership='引文、采纳/排除及兼容性由代理判断；工具只校验结构与来源，不自动排除整段原提示词。')
+
+
 def validate(snapshot, binding, originals, shot_ids):
     """Validate provenance/structure; semantic compatibility remains an agent judgment."""
     if snapshot is None:
@@ -46,12 +57,31 @@ def validate(snapshot, binding, originals, shot_ids):
     check(review.get(source_key) == binding[source_key], 'assessment source mismatch')
     check(review.get('script_fingerprint') == binding['script_fingerprint'], 'stale script assessment')
     check(review.get('preserves_story') is True, 'preserves_story=true required')
+    guidance = _check_fields(review, raw, originals, shot_ids, check)
+    repair_prompt.finish(errors)
+    return guidance
+
+
+def validate_fields(raw, review, originals, shot_ids):
+    """Cheap field/quote preflight; freshness and semantic approval are checked later."""
+    errors = []
+    def check(ok, message):
+        if not ok:
+            errors.append('Original prompt reference: ' + message)
+    core.require(isinstance(raw, str) and raw.strip() and isinstance(review, dict),
+                 'Original prompt text and reference fields required')
+    guidance = _check_fields(review, raw, originals, shot_ids, check)
+    repair_prompt.finish(errors)
+    return guidance
+
+
+def _check_fields(review, raw, originals, shot_ids, check):
     for field in ('compatibility_reason',):
         check(isinstance(review.get(field), str) and bool(review[field].strip()),
               field + ' required: check actors, order, results, timing, aspect and silent rules')
     selections, excluded = review.get('selections'), review.get('excluded')
     core.require(isinstance(selections, list) and isinstance(excluded, list), 'selections/excluded arrays required')
-    check(bool(selections or excluded), 'select compatible details or explain why none can be used')
+    check(bool(selections or excluded), 'selections/excluded: select compatible details or explain why none can be used')
     guidance = {}
     for i, row in enumerate(selections):
         if not isinstance(row, dict):
@@ -82,5 +112,4 @@ def validate(snapshot, binding, originals, shot_ids):
         check(isinstance(quote, str) and bool(quote.strip()) and quote in raw,
               f'excluded[{i}].source_quote must be an exact excerpt')
         check(isinstance(reason, str) and bool(reason.strip()), f'excluded[{i}].reason required')
-    repair_prompt.finish(errors)
     return guidance

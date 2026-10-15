@@ -23,6 +23,16 @@ def delivery_available(path):
     return not path.exists() or (path.is_dir() and not any(path.iterdir()))
 
 
+def check_source_bindings(bindings):
+    """A single-table submission must still match what the agent actually saw."""
+    core.require(bindings is None or isinstance(bindings, list), '来源绑定须为列表')
+    for binding in bindings or []:
+        core.require(isinstance(binding, dict) and text(binding.get('path')) and text(binding.get('sha256')),
+                     '来源绑定须有路径和 SHA256')
+        core.require(core.sha(binding['path']) == binding['sha256'],
+                     '审查来源已变化，须另建审查：' + binding['path'])
+
+
 def expand_check_groups(row):
     """Expand explicit grouped judgments, never infer a visual judgment from a verdict."""
     groups, exceptions = row.get('check_groups'), row.get('check_exceptions', {})
@@ -253,7 +263,7 @@ def expand(ctx, data):
 
 
 def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *, original_prompt_file=None,
-            output=None, reuse_overviews=None, concise=False):
+            output=None, reuse_overviews=None, concise=False, source_bindings=None):
     import repair_cycle as repair
     project, run_dir = Path(project).resolve(), Path(run_dir).resolve()
     report = Report()
@@ -305,6 +315,7 @@ def prepare(project, supplied, run_dir, original_prompt=None, input_data=None, *
             p['groups'] = [dict(id='G01', shot_ids=ids, version=1)]
         gid = p['groups'][0]['id']
         with evidence_operation():
+            check_source_bindings(source_bindings)
             core.validate(p, project)
             previous = p.pop('repair_baseline', None)
             baseline = repair.baseline(p)
@@ -442,7 +453,7 @@ def load_original_prompt(p, project, gid):
     del p['deferred_storyboard_prompts'][gid]
 
 
-def complete(project, worklist_file, output, run_dir, profile=None, target_aspect=None):
+def complete(project, worklist_file, output, run_dir, profile=None, target_aspect=None, *, source_bindings=None):
     import planner
     import repair_cycle as repair
     from finish_review import intact, validate_delivery
@@ -463,6 +474,7 @@ def complete(project, worklist_file, output, run_dir, profile=None, target_aspec
             # One operation shares hashes, decoded image metadata and contexts across all stages.
             # It rehashes every dependency before committing, including same-size replacements.
             with evidence_operation():
+                check_source_bindings(source_bindings)
                 ctx = images.context(p, project, data['group_id'])
                 review = expand(ctx, data)
                 images.record_review(p, project, review)
