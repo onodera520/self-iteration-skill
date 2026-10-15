@@ -8,7 +8,7 @@
 | INPUT requirements | status=ready；keyframe={phase:entry/action/exit, description:当前参考阶段}；provenance=[{field:所支持字段, status:observed/user_provided/script/assumed/unknown, source:具体出处}]。provenance.status 与 facts.source.kind 不是同一组枚举；过程图不强制终态，参见审查规则 |
 | INPUT state_changes | 普通校对可省略。已填写的真实变化仍须来源、authorized、before/after 及匹配的 requirements.entry_state 或明确继承；阶段及跨镜状态冲突在 prepare 检查，不等待 complete。不能为满足必填而编造变化或改名隐藏冲突 |
 | 每镜结论 | verdict=PASS/FAIL/uncertain 明确覆盖主体内容、状态承接、参考可用性三组；reference_phase=entry/action/exit/unknown；PASS 的 match_level=0–3，其他为 null。未知阶段不得 PASS |
-| observation.visible_facts | 非空字符串数组，复用首看已存事实，须支撑本镜判断。动作／姿态正确而道具或脚下位置出框可通过，只写动作和裁切，不把画外物体写成已看见；脚本明确朝向相反须记错误。有事实不代表已经通过 |
+| observation.visible_facts | 非空字符串数组，复用首看已存事实，须支撑本镜判断。核心动作／表演可读而局部模糊或道具、脚下位置出框可通过，不把画外物体写成已看见；核心表演被构图整体排除或脚本明确朝向相反须记错误。有事实不代表已经通过 |
 | findings | PASS/uncertain 为 []；FAIL 至少一项。每个错误只填写下列证据一次，程序生成 reason、issues、repair_assessments，不另写这些重复字段 |
 | unresolved | 无疑点为 []；uncertain 至少一项 {check:具体项, reason:无法确认的必要信息}。不放大、不排复查；FAIL 也可保留其他疑点 |
 | reference | 通常省略，由程序补保留图或暂不省图。仅建议省图时写 {decision:ai_fill, derivable:true, basis_shot_ids:[同组前镜,同组后镜], reason:明确推导理由}；双侧须 PASS 且保留，保护首尾及必要锚点，不自动降低省图门槛 |
@@ -20,7 +20,7 @@ FAIL 的 findings 每项：
 {"check":"props","script_quote":"男孩接住钥匙，女孩松手","actual":"结束阶段仍由女孩持钥匙","fix":"修改该分镜图为男孩拿稳钥匙、女孩松手，保留其他脚本内容","kind":"wrong_transfer_result","affects_story":true,"preserves_script":true,"impact":"交接完成的关键结果与脚本相反"}
 ```
 
-check 为 identity/scene/props/composition/key_state/continuity/cleanliness 之一；引文逐字来自同镜脚本，actual 是可见矛盾，fix 保留原意。kind=ordinary 表示普通明确错误，affects_story 显式 true/false，preserves_script=true；普通错误不必另写 impact，程序复用引文与矛盾。关键错误 kind 为 missing_key_node/wrong_actor/broken_causality/wrong_transfer_result/explicit_key_requirement，须 affects_story=true 并明确 impact。严重损坏 kind=severe_visual_damage，另写 impact、damage_description、obscured_content；原图 SHA 自动绑定。分类来自实际判断，不能从文字自动猜测。
+check 为 identity/scene/props/composition/key_state/continuity/cleanliness 之一；引文逐字来自同镜脚本，actual 写可见不符，含构图整体排除核心表演，fix 保留原意。此类构图错误通常用 composition、ordinary，不自动记关键错误或严重损坏。kind=ordinary 表示普通明确错误，affects_story 显式 true/false，preserves_script=true；普通错误不必另写 impact，程序复用引文与不符事实。关键错误 kind 为 missing_key_node/wrong_actor/broken_causality/wrong_transfer_result/explicit_key_requirement，须 affects_story=true 并明确 impact。严重损坏 kind=severe_visual_damage，另写 impact、damage_description、obscured_content；原图 SHA 自动绑定。分类来自实际判断，不能从文字自动猜测。
 
 默认 asset_comparisons=[]，不为填字段打开原资产。只有用户明确要求资产外观对照时才写：id、shot_id、asset_id、aspect=wardrobe/appearance/prop/scene、decision。PASS 写 stable_matches；FAIL 写 stable_conflicts=[{feature,expected,observed,environment_exclusion}] 并在 finding 的 asset_ids/asset_comparison_ids 关联；uncertain 写 unobservable_features 与 followup。人物对照另写 story_requirement，非 PASS 写 story_impact。程序补来源哈希和同镜证据，不代填判断。
 

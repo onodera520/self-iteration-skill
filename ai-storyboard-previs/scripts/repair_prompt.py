@@ -4,6 +4,11 @@ import hashlib
 import re
 
 VERSION = 6
+VISUAL_STORY_RULE = (
+    '提示词保真仅核对原脚本已有的可见人物、动作、表情、位置、道具关系、镜序和必要切镜。'
+    '对白文字及其含义不参与保真或时长检查，不要求将对白独有信息转换成画面，也不能因此停止导出。'
+    '去除说话、声音和新增文字指令，保留已有视觉表演，不新增人物、道具、动作或事件。'
+    'preserves_story=true 与 story_basis 仅确认保留上述可见内容。')
 SILENT_DIRECTIVE = ('只生成无声画面。人物不说话，不做说话口型；'
     '不得生成任何人声、对白、旁白、OS/VO、音乐或音效；'
     '不得出现字幕、对白文字、台词文字或其他新增屏幕文字。'
@@ -64,18 +69,18 @@ class VisualOnly:
         self.source_fields[path] = dict(source_text=source,
             source_sha256=hashlib.sha256(source.encode('utf-8')).hexdigest(), signals=signals)
         if not isinstance(row, dict):
-            self.errors.append(f'{path}: visual adaptation required for {signals}; preserve existing actions/plot, do not simply delete dialogue')
+            self.errors.append(f'{path}: visual adaptation required for {signals}; retain existing visible actions/expressions/relationships; dialogue meaning is excluded')
             return source
         if row.get('source_sha256') != hashlib.sha256(source.encode('utf-8')).hexdigest():
             self.errors.append(f'{path}: stale visual adaptation source_sha256')
         text = row.get('visual_text')
         if not isinstance(text, str) or not text.strip():
-            self.errors.append(f'{path}: nonempty visual_text required; unresolved dialogue-only plot must stop before submission')
+            self.errors.append(f'{path}: nonempty visual_text for existing visible content required; dialogue-only information may be omitted')
             text = source
         elif speech_signals(text) or any(tag in text for tag in TAGS):
             self.errors.append(f'{path}: visual_text still contains speech/audio/text or shot headers')
         if row.get('preserves_story') is not True or not isinstance(row.get('story_basis'), str) or not row['story_basis'].strip():
-            self.errors.append(f'{path}: preserves_story=true and original-script story_basis required; no invented visual actions')
+            self.errors.append(f'{path}: preserves_story=true and visible-script story_basis required; dialogue meaning is excluded, no invented visual actions')
         self.used[path] = dict(row)
         return text
 

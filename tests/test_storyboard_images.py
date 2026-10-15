@@ -582,6 +582,11 @@ class StoryboardImagesTests(fixtures.Base):
                 self.assertEqual(result['status'], 'complete')
                 self.assertTrue(Path(result['delivery']).is_file())
                 self.assertTrue(result['decision']['triggered'])
+                self.assertIn('导出整批新视频提示词', result['delivery_next_action'])
+                self.assertIn('完成后再结束交付', result['delivery_next_action'])
+                resumed = core.read(self.path.parent/f'done-{mixed}'/'FINISH.view.json')
+                self.assertEqual(resumed['prompt_status'], result['prompt_status'])
+                self.assertEqual(resumed['delivery_next_action'], result['delivery_next_action'])
                 self.p = core.read(self.path)
                 if mixed:
                     self.assertEqual(result['prompt_status'], 'needs_preparation')
@@ -671,7 +676,9 @@ class StoryboardImagesTests(fixtures.Base):
 
     def test_prompt_gaps_collected_once_and_resumed_without_redoing_review(self):
         style = self.p.pop('repair_asset_style')
-        self.p['shots'][0]['script'] += '女孩说话。'
+        visible_acting = '女孩神色严肃，直视男孩。'
+        dialogue = '女孩说 {镇上仓库今晚会倒塌。}'
+        self.p['shots'][0]['script'] += visible_acting + dialogue
         self.p['source_script'] = '\n'.join(s['script'] for s in self.p['shots'])
         self.p.pop('repair_baseline', None)
         Image.new('RGB', (90, 160), 'green').save(self.p['storyboard_images'][0]['path'])
@@ -684,6 +691,7 @@ class StoryboardImagesTests(fixtures.Base):
         self.assertEqual(result['prompt_status'], 'needs_preparation')
         self.assertNotIn('prompt_plan', result)
         inputs = core.read(result['prompt_inputs'])
+        self.assertIn('对白文字及其含义不参与', inputs['visual_story_rule'])
         for term in ('repair_prompt_references', 'Asset style', '混用画幅', 'S01.generation_text'):
             self.assertIn(term, result['prompt_next_action'])
         self.assertFalse(inputs['repair_asset_style']['preserves_story'])
@@ -702,7 +710,7 @@ class StoryboardImagesTests(fixtures.Base):
                 excluded=[dict(source_quote=source['text'], reason='SIMULATED no useful visual detail')])})
         field = inputs['visual_sources']['S01.generation_text']
         self.p['repair_visual_adaptations'] = {'S01.generation_text': dict(
-            source_sha256=field['source_sha256'], visual_text=field['source_text'].replace('女孩说话。', ''),
+            source_sha256=field['source_sha256'], visual_text=field['source_text'].replace(dialogue, ''),
             preserves_story=True, story_basis='SIMULATED visible script actions retained; no dialogue-only event')}
         core.save(self.path, self.p)
         plan_file = self.path.parent/'gaps-plan.json'
@@ -713,12 +721,22 @@ class StoryboardImagesTests(fixtures.Base):
         self.assertEqual(self.p['reviews'], old_review)
         self.assertEqual(self.p['aggregation'], old_aggregation)
         self.assertEqual(core.read(plan_file)['checks_passed'], False)
+        view = core.read(plan_file.with_suffix('.view.json'))
+        self.assertEqual(view['visual_story_rule'], inputs['visual_story_rule'])
         output = self.path.parent/'gaps-prompt.md'
         with self.assertRaises(ValueError):
             quality.finish_plan(self.p, self.path, 'G01', core.read(plan_file), output)
         self.assertFalse(output.exists())
         quality.finish_plan(self.p, self.path, 'G01', self.simulated_plan(), output)
-        self.assertEqual(output.read_text(encoding='utf8').count('【时长】1s。'), 3)
+        text = output.read_text(encoding='utf8')
+        self.assertEqual(text.count('【时长】1s。'), 3)
+        self.assertIn('16:9', text)
+        self.assertIn('人物不说话，不做说话口型', text)
+        self.assertIn(visible_acting, text)
+        self.assertNotIn('镇上仓库', text)
+        self.assertNotIn('倒塌', text)
+        self.assertTrue(self.p['shots'][0]['script'].endswith(visible_acting + dialogue))
+        self.assertIn(dialogue, self.p['source_script'])
         self.assertEqual({path: Path(path).read_bytes() for path in frozen}, frozen)
 
     def test_prompt_source_reuses_reads_but_rechecks_each_operation(self):

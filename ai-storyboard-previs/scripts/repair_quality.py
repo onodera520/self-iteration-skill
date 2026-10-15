@@ -97,6 +97,7 @@ def reading_view(request, p):
                   guidance=visual(f'asset.{row["asset_id"]}.guidance', row['guidance']))
              for row in request['asset_style']['assets']]
     return dict(source_fingerprint=core.digest(request),
+                visual_story_rule=repair_prompt.VISUAL_STORY_RULE,
                 fixed=dict(seconds_per_shot=1, duration_seconds=request['duration_seconds'],
                            aspect_ratio=request['aspect_ratio'],
                            previs_directive=request['previs_directive'],
@@ -120,7 +121,7 @@ def validate_compact(plan, request):
 
     check(plan.get('source_fingerprint') == core.digest(request),
           'stale prompt-plan source_fingerprint; regenerate the batch source')
-    check(plan.get('preserves_story') is True, 'prompt plan must explicitly preserve the frozen script')
+    check(plan.get('preserves_story') is True, 'prompt plan must explicitly preserve the visible story; dialogue meaning is excluded')
     check(plan.get('checks_passed') is True, 'explicitly confirm all nine semantic checks passed')
     ids = [block['shot_id'] for block in request['blocks']]
     check(plan.get('reviewed_shot_ids') == ids,
@@ -178,7 +179,7 @@ def validate(plan, request):
     if not isinstance(plan, dict):
         raise ValueError('Complete one source-bound repair_prompt_plans batch before exporting a new prompt')
     check(plan.get('source_fingerprint') == core.digest(request), 'stale prompt-plan source_fingerprint; regenerate the batch source')
-    check(plan.get('preserves_story') is True, 'prompt plan must explicitly preserve the frozen script')
+    check(plan.get('preserves_story') is True, 'prompt plan must explicitly preserve the visible story; dialogue meaning is excluded')
     rows = plan.get('shots')
     rows = rows if isinstance(rows, list) else []
     ids = [b['shot_id'] for b in request['blocks']]

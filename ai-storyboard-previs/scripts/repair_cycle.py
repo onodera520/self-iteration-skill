@@ -298,6 +298,7 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
     if preparation_errors:
         # Internal work data only: no guessed style or automatic semantic approval.
         inputs = dict(input_preparation_version=1, source_group_id=gid,
+            visual_story_rule=repair_prompt.VISUAL_STORY_RULE,
             errors=preparation_errors,
             source_fingerprint=d['binding']['source_fingerprint'],
             script_fingerprint=d['binding']['script_fingerprint'],

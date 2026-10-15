@@ -4,7 +4,7 @@
 
 prepare_storyboards.py complete 在当前图片审查后完成聚合、阈值判定与冻结报告。门槛见 [返修证据](repair-assessments.md)：关键剧情错误一镜，严重必要内容损坏一镜，或普通明确错误至少两镜且占全批至少 20%。分母始终全部原镜号，待核查不计分子。未达阈值不读原生成提示词，不准备新提示词。
 
-触发后整批准备，覆盖全部脚本镜头，ai_fill 也不删镜。只有确认 FAIL 获得实际 correction；保真编排可澄清所有正文，但不把未证实问题写成返修事实。来源绑定脚本基线、原资产、provided 原图、当前审查与聚合，不使用输入提示词证明画面已出现某内容。
+达到阈值后，报告冻结后的下一优先事项就是导出整批新视频提示词，完成后再结束交付。触发后整批准备，覆盖全部脚本镜头，ai_fill 也不删镜。只有确认 FAIL 获得实际 correction；保真编排可澄清所有正文，但不把未证实问题写成返修事实。来源绑定脚本基线、原资产、provided 原图、当前审查与聚合，不使用输入提示词证明画面已出现某内容。
 
 ## 受控提示词
 
@@ -31,7 +31,9 @@ requirements.must_have／must_not_have 保留原标签，空约束省略，只�
 
 ## 纯视觉转换与资产风格
 
-只对含对白、OS／VO、说话表演、声音或新增文字指令的字段填 repair_visual_adaptations。每项含 source_sha256（转换前字段 UTF-8 SHA256）、非空 visual_text、preserves_story=true、story_basis，说明原有画面如何承接剧情。不能盲删台词、把台词搬进其他字段或发明动作；对白独有关键剧情无现有画面承接时停止并说明冲突。
+只对含对白、OS／VO、说话表演、声音或新增文字指令的字段填 repair_visual_adaptations。每项含 source_sha256（转换前字段 UTF-8 SHA256）、非空 visual_text、preserves_story=true、story_basis；后两项只确认原脚本已有的可见动作、表情、人物、位置和道具关系得到保留。对白文字及其含义不参与保真或时长检查，直接去除，不要求把对白独有信息转换成画面，不能因此停止导出。不得把台词搬到其他字段或发明动作、人物、道具、事件。原脚本及基线完整保留。
+
+例如原文是“陆言神色严肃，直视人群说 {富商逼死佃户……}”，保留严肃神色及直视人群即可；“瞪大双眼、下颌绷紧并高声宣判说 {今夜必遭横祸……}”，保留瞪眼和下颌绷紧即可。不新增富商、佃户、闪回或灾祸镜头，也不将对白信息列为 unresolved。
 
 路径为 Sxx.generation_text／design／correction／keyframe_target.description；列表用零基索引，如 Sxx.must_have.0／must_not_have.0／critical_changes.0；公共字段为 asset.<资产编号>.description／guidance 与 format.0。无相关指令的字段原样保留，随后编排再按实际需要澄清正文。最终全量检查纯视觉残留。
 
@@ -57,7 +59,7 @@ prepare --original-prompt 只记路径，达到阈值才读取并登记 source_s
 
 ## 默认导出与交付
 
-审查报告先冻结。complete 已生成 PROMPT.view.json／PROMPT.json 就直接填写；否则按 FINISH_REPORT.prompt_inputs 的内部准备清单同批补齐，不轮流试错。再直接准备一次，由 prepare 核验并刷新仅风格造成的绑定变化：
+审查报告先冻结，达到阈值就继续优先导出，不能把报告已完成当成本次交付全部完成。complete 已生成 PROMPT.view.json／PROMPT.json 就直接填写；否则按 FINISH_REPORT.prompt_inputs 的内部准备清单同批补齐，不轮流试错，不重跑有效审查。必要画幅等信息取得后直接续接。再直接准备一次，由 prepare 核验并刷新仅风格造成的绑定变化：
 
 ```text
 python scripts/repair_quality.py prepare PROJECT.json G01 PROMPT_INTERNAL/PROMPT.json

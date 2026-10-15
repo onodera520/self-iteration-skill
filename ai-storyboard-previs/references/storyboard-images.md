@@ -76,7 +76,7 @@ python scripts/prepare_storyboards.py prepare PROJECT.json --images IMAGES.json 
 - check_exceptions：仅异常具体项，例如 {"props":"FAIL"}。每组汇总必须与具体异常一致，不允许缺异常定位的 FAIL/uncertain。
 - verdict、reference_phase、observation.visible_facts、reference 取舍；PASS 还需 match_level=0/1/2/3，分别为严格匹配及三级放宽。
 
-三级在同一次观察中判断，全部必要剧情元素始终成立；不重新匹配或选帧。核心矛盾直接 FAIL，看不清的必要信息直接 uncertain，不放大、不安排复查。PASS 默认“符合脚本”，FAIL/uncertain 写具体原因，uncertain 写需确认的信息；双侧省图理由仍明确填写。程序机械展开旧七项，版本1/2兼容。事实记录一次后复用，不自动补结论。
+三级在同一次观察中判断，全部必要剧情元素始终成立；不重新匹配或选帧。按 [图片审查规则](storyboard-review.md#动作可读性与核心表演)，核心动作关系足够识别时允许局部模糊／画外裁切，核心矛盾或构图整体排除核心表演直接 FAIL；排除上述情形后仍证据不足才 uncertain，不放大、不安排复查。PASS 默认“符合脚本”，FAIL/uncertain 写具体原因，uncertain 写需确认的信息；双侧省图理由仍明确填写。程序机械展开旧七项，版本1/2兼容。事实记录一次后复用，不自动补结论。
 
 阶段未知不得 PASS；明显人物矛盾仍可 FAIL，即使动作阶段无法确定。不要为了让图片通过而改写脚本或要求。相邻图片只校对可见连续性，不能要求它们证明中间运动轨迹。七项检查中的动作／构图应按参考图适用范围判断，无法证明动态过程本身不构成 uncertain。
 
@@ -94,7 +94,7 @@ python scripts/prepare_storyboards.py complete PROJECT.json PREPARE_INTERNAL/WOR
 
 complete 在同一锁和证据周期内恢复完整审查、核验、记录、规划、判断阈值、渲染并冻结，避免多命令重复构建上下文。一次操作内复用哈希和图片元信息，退出前重新读取全部依赖内容；同大小、同修改时间的替换也不能绕过校验。内部目录、交付目录和项目独立，失败后查看 FINISH_REPORT，修正后使用新目录重试。
 
-新报告 delivery_format_version=3：冻结前自动比对九列与当前脚本、审查及取舍，核验逐镜原图哈希与链接、缩略图预览像素、行序、完整覆盖及交付文件集合。校验成功直接交付，不再次人工逐镜核对报告和图片，也不再次渲染。失败或刚修改渲染／规则时才定位检查；旧冻结报告沿用原校验能力，不覆盖升级。自动校验确认交付准确呈现已有审查，不代替最初看图。
+新报告 delivery_format_version=3：冻结前自动比对九列与当前脚本、审查及取舍，核验逐镜原图哈希与链接、缩略图预览像素、行序、完整覆盖及交付文件集合。未达阈值校验成功后直接交付；达阈值则优先继续提示词导出，完成后再结束交付。不再次人工逐镜核对报告和图片，也不再次渲染。失败或刚修改渲染／规则时才定位检查；旧冻结报告沿用原校验能力，不覆盖升级。自动校验确认交付准确呈现已有审查，不代替最初看图。
 
 交付只有 **01_分镜图审查.md 与 images/**（达阈值另有新视频提示词），报告标题与镜头数直接接一张九列表：分组、原镜号、镜头时长、脚本描述、小分镜图、检验结果、图片处理、推导依据镜号、问题或修改建议。不附表格前的流程说明和分组诊断；诊断保留内部。通过镜头最后一栏固定为“符合脚本”，省图依据留在专列。时长采用脚本计划时长。所有行展示缩略图并链接保存的原图；不输出漏镜统计或补帧建议。
 
@@ -108,9 +108,9 @@ complete 在同一锁和证据周期内恢复完整审查、核验、记录、�
 
 未达阈值时不读取或分析原生成提示词，也不准备新提示词。只有路径保存在内部 deferred_storyboard_prompts；显式 API 文本同样延后登记，不进入审查上下文。触发后才读取原文，保存在 source_storyboard_prompts 并冻结来源，后续筛选复用该原文。文件缺失、编码错误或筛选缺项只影响提示词准备，审查报告正常完成；尚未读成功的文件可补齐后在提示词准备阶段继续读取。
 
-达到阈值后输出整批所有镜头的新视频提示词，用户自行生成。complete 若来源就绪，会同时写入 PROMPT.source.json、PROMPT.view.json、PROMPT.json；代理阅读视图，集中核对／修改精简计划，再用 repair_quality.py finish 导出。若缺资产风格、旧提示词筛选、纯视觉转换或混用画幅的目标，报告先正常完成，FINISH_REPORT 标 prompt_status=needs_preparation，一次汇总缺项并给出 prompt_inputs 路径。PROMPT.inputs.json 保留原资产路径／SHA、需转换原文／SHA、旧提示词来源及画幅；代理据此同批补齐项目字段，再直接 repair_quality.py prepare／finish，不单独 decide 或重做仍有效的视觉判断。prepare 只刷新风格准备变化，其他证据变化须重新核验。原提示词已登记后如主动修改须重新 register 并筛选，不能当作当前来源自动替换已冻结原文。
+达到阈值后，下一优先事项是导出整批所有镜头的新视频提示词，导出后再结束交付，用户自行生成。complete 若来源就绪，会同时写入 PROMPT.source.json、PROMPT.view.json、PROMPT.json；代理阅读视图，集中核对／修改精简计划，再用 repair_quality.py finish 导出。若缺资产风格、旧提示词筛选、纯视觉转换或混用画幅的目标，报告先正常完成，FINISH_REPORT 标 prompt_status=needs_preparation，一次汇总缺项并给出 prompt_inputs 路径。PROMPT.inputs.json 保留原资产路径／SHA、需转换原文／SHA、旧提示词来源及画幅，并明确可见剧情保真范围；代理据此同批补齐项目字段，再直接 repair_quality.py prepare／finish，不单独 decide 或重做仍有效的视觉判断。需要用户决定的目标画幅等必要信息集中询问，取得后继续导出。prepare 只刷新风格准备变化，其他证据变化须重新核验。原提示词已登记后如主动修改须重新 register 并筛选，不能当作当前来源自动替换已冻结原文。
 
-原资产对应、逐镜内容、每镜一秒和静音要求保持。所有图片共同画幅直接沿用；混用时导出前确定 storyboard_target_aspect（或 complete --target-aspect 宽:高），不自动裁图。旧提示词保存在 source_storyboard_prompts，绑定 source_fingerprint；repair_prompt_references 的来源字段也使用 source_fingerprint，其他筛选规则不变。它仅提供与脚本相容的视觉建议，不充当图像审查证据。
+原资产对应、已有可见逐镜内容、每镜一秒和静音要求保持。对白文字及其含义不参与提示词保真或时长检查，不要求视觉转译，也不能因此停止导出；去除说话、声音和新增文字指令，保留已有动作、表情、人物与道具关系，不新增事件。preserves_story／story_basis 仅确认已有可见内容。所有图片共同画幅直接沿用；混用时导出前确定 storyboard_target_aspect（或 complete --target-aspect 宽:高），不自动裁图。旧提示词保存在 source_storyboard_prompts，绑定 source_fingerprint；repair_prompt_references 的来源字段也使用 source_fingerprint，其他筛选规则不变。它仅提供与脚本相容的视觉建议，不充当图像审查证据。
 
 编排计划绑定完整来源；原资产、图片、脚本、目标画幅、原提示词或其筛选变化后必须重新准备并核验计划。项目到提示词导出停止，由用户自行生成。
 
@@ -126,4 +126,4 @@ python scripts/prepare_storyboards.py resume PROJECT.json PREPARE_INTERNAL --sho
 
 默认输出字段进度及视图路径；--page 返回一页审查包与已存记录，--shots 返回选定镜头及左右相邻镜头的当前原文、状态、原图路径、保存的判断与问题，保留整批分组背景和相关资产。两者不能同时使用，新策略 detail_queue 为空，unresolved_items 只列已有记录的疑点文字，不包含重开图片任务；历史策略兼容旧队列。涉及远处省图依据时显式补读相应镜号。恢复入口重新校验原图、脚本、资产、总览绑定及已保存上下文；来源改变即停止。记录存在不代表实际审查已经完成，更不代表 PASS。工具不自动补结论，complete 仍作全部质量校验。旧准备目录没有 REVIEW.view 时兼容 CONTEXT，也可用 --shots 得到精简视图。
 
-prepare／complete 默认打印简报；complete 另保存 FINISH.view.json，压缩后只读此简报接着处理。完整 FINISH_REPORT、指纹及冻结文件清单照常保存。仅诊断需要时使用 --detailed。完成后的提示词阶段以简报的 prompt_status、prompt_plan／prompt_inputs 继续；不因压缩重跑仍有效的 complete。
+prepare／complete 默认打印简报；complete 另保存 FINISH.view.json，压缩后只读此简报接着处理。完整 FINISH_REPORT、指纹及冻结文件清单照常保存。仅诊断需要时使用 --detailed。status=complete 仅表示审查报告完成；prompt_status=below_threshold 直接交付，needs_preparation／needs_semantic_review 按 prompt_plan／prompt_inputs 优先继续导出，不因压缩重跑仍有效的 complete。

@@ -86,7 +86,8 @@ class CompactTests(unittest.TestCase):
         p, source, _, plan = compact_fixture()
         with self.assertRaises(ValueError) as caught:
             quality.compile_request(quality.compact_template(source), source, p)
-        for term in ('preserve the frozen script', 'original order', 'story_coverage', 'resolution note'):
+        for term in ('preserve the visible story', 'dialogue meaning is excluded',
+                     'original order', 'story_coverage', 'resolution note'):
             self.assertIn(term, str(caught.exception))
         source['asset_style']['assets'][0]['guidance'] = '改为陶瓷表面。'
         with self.assertRaisesRegex(ValueError, 'stale'):

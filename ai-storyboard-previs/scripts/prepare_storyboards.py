@@ -483,12 +483,13 @@ def complete(project, worklist_file, output, run_dir, profile=None, target_aspec
                     '旧版冻结交付保留原校验能力，按需核对；不改写原文件。')
                 report['decision'] = decision
                 if decision['triggered']:
+                    report['delivery_next_action'] = '审查报告已冻结；达到阈值，下一优先事项是导出整批新视频提示词，完成后再结束交付。无需重看报告或图片。'
                     import repair_quality
                     try:
                         source = repair_quality.source_request(p, project, ctx['group_id'])
                     except (ValueError, OSError, UnicodeError) as exc:
                         report['prompt_status'] = 'needs_preparation'
-                        report['prompt_next_action'] = str(exc)
+                        report['prompt_next_action'] = '优先导出新提示词：按内部清单集中补齐缺项，再 prepare／finish；对白内容及含义不阻止导出。\n' + str(exc)
                         if isinstance(getattr(exc, 'inputs', None), dict):
                             inputs_file = run_dir / 'PROMPT.inputs.json'
                             core.save(inputs_file, exc.inputs)
@@ -497,7 +498,8 @@ def complete(project, worklist_file, output, run_dir, profile=None, target_aspec
                         core.save(run_dir / 'PROMPT.source.json', source)
                         core.save(run_dir / 'PROMPT.view.json', repair_quality.reading_view(source, p))
                         core.save(run_dir / 'PROMPT.json', repair_quality.compact_template(source))
-                        report.update(prompt_status='needs_semantic_review', prompt_plan=str(run_dir / 'PROMPT.json'))
+                        report.update(prompt_status='needs_semantic_review', prompt_plan=str(run_dir / 'PROMPT.json'),
+                            prompt_next_action='优先按 PROMPT.view.json 核对已有可见剧情并填写计划，然后 finish 导出；不检查对白内容及含义，不重跑有效审查。')
                 else:
                     report['prompt_status'] = 'below_threshold'
             core.save(project, p)

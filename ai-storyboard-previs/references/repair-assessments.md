@@ -10,7 +10,7 @@
 
 critical 与 affects_story 显式布尔。script_quote 是同镜 script 的逐字非空片段；issue_ids 唯一且均属本镜。impact 写具体影响；correction 只恢复原意，preserves_script=true。同镜 issues 绑定有效原图与 SHA256，repair_target=storyboard_image，不填写时间。不能借邻镜证据或凭提示词证明画面问题。
 
-关键问题还需 affects_story=true，critical_kind 为 missing_key_node／wrong_actor／broken_causality／wrong_transfer_result／explicit_key_requirement，并说明关键作用。普通外观、表演或构图差异无剧情影响，不制造 FAIL；脚本明确的角色朝向错误仍 FAIL，普通方向错误用 ordinary，不自动归为关键问题。动作／姿态正确但道具或脚下支撑物仅在画外不算错误、不计阈值。除这种可通过的画外裁切外，阶段不清或关键内容无法辨认直接 uncertain，写明疑点后交付；不放大复看，不猜修复。
+关键问题还需 affects_story=true，critical_kind 为 missing_key_node／wrong_actor／broken_causality／wrong_transfer_result／explicit_key_requirement，并说明关键作用。普通外观、表演或构图差异不影响剧情且核心表演可读，不制造 FAIL；脚本明确的角色朝向错误或构图整体排除核心表演仍 FAIL，通常记 composition、ordinary，不自动归为关键问题或严重损坏。核心动作关系足够识别时，局部模糊、遮挡或道具／支撑物在画外不算错误、不计阈值。只有排除可接受差异与明确错误后，必要关系或阶段仍确实无法判断时才 uncertain，写明疑点后交付；不放大复看，不猜修复。
 
 严重画面损坏仅在妨碍脚本必需内容辨认的确认 FAIL、affects_story=true 时填写：
 

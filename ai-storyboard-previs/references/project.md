@@ -22,7 +22,7 @@ aggregation 独立保存 groups、逐镜 decisions、grouping_trace、clipGroupL
 
 deferred_storyboard_prompts 只保存原提示词路径或延后文本，未达阈值不读取分析。触发后 source_storyboard_prompts 保存原文与文本 SHA256、source_fingerprint；repair_prompt_references 保存脚本绑定的相容视觉筛选。缺文件／筛选只阻止提示词准备，不影响报告。
 
-repair_baseline 冻结 source_script、逐镜原文及设计、逐字摘录的 video_format_requirements。repair_decisions 绑定当前审查、聚合、原资产和基线；每个确认 FAIL 有一条 repair_assessment，阈值见 [返修证据](repair-assessments.md)。达到阈值后才填写 repair_asset_style、必要 repair_visual_adaptations 和原提示词筛选。
+repair_baseline 冻结 source_script、逐镜原文及设计、逐字摘录的 video_format_requirements。repair_decisions 绑定当前审查、聚合、原资产和基线；每个确认 FAIL 有一条 repair_assessment，阈值见 [返修证据](repair-assessments.md)。达到阈值后优先填写 repair_asset_style、必要 repair_visual_adaptations 和原提示词筛选，完成整批提示词导出。提示词 preserves_story／story_basis 仅确认保留已有可见剧情，排除对白文字及其含义；不要求视觉转译对白，不因其无法无声表达停止导出。
 
 提示词来源 request prompt_version=5，经过全镜编排的请求为 version=6；不改原 script、duration 或 baseline。默认精简计划 plan_version=2 仅记录必要 edits／notes 与九项具体结论，仍确认全部镜号已核对，详见 [编排规则](prompt-quality.md)。
 
@@ -30,6 +30,6 @@ repair_baseline 冻结 source_script、逐镜原文及设计、逐字摘录的 v
 
 公开目录仅有 01_分镜图审查.md 与 images/：一张九列表，全部原图与展示缩略图。PASS 的问题栏只写“符合脚本”；待核查显示“—／暂不省图”。省图依据在专列，所有原镜与原图仍保留。达阈值且准备有效时另在独立目录输出 G01_新视频提示词.md，内部 JSON 不外放。
 
-delivery_format_version=3 在冻结前自动核对九列与当前已完成审查、逐镜对应／原图哈希、链接、缩略图预览、覆盖、顺序及文件集合。通过后直接交付，不重复人工逐镜核对。失败定位对应部分。不能用机械校验代替初次视觉判断。
+delivery_format_version=3 在冻结前自动核对九列与当前已完成审查、逐镜对应／原图哈希、链接、缩略图预览、覆盖、顺序及文件集合。未达阈值通过后直接交付，达阈值优先导出提示词后再结束交付，不重复人工逐镜核对。失败定位对应部分。不能用机械校验代替初次视觉判断。
 
 原交付冻结；修订另用新目录，repair_delivery_history 记录关联，脚本修订保留 repair_baseline_history。目录已有无关文件时换空目录，不覆盖原成果。现有历史报告和原输入文件不因 Skill 清理而删除。
