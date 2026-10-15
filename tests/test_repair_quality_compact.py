@@ -32,6 +32,30 @@ def compact_fixture():
 
 
 class CompactTests(unittest.TestCase):
+    def test_grouped_plan_preserves_output_with_four_judgments_and_no_duplicate_notes(self):
+        p, source, _, plan = compact_fixture()
+        grouped = copy.deepcopy(plan)
+        grouped.update(plan_version=3, notes={}, checks={name: 'SIMULATED resolved fixture ' + name
+                                                       for name in quality.CHECK_GROUPS})
+        self.assertEqual(repair_export.render_prompt(p, quality.compile_request(grouped, source, p)),
+                         repair_export.render_prompt(p, quality.compile_request(plan, source, p)))
+        for field in quality.CHECK_GROUPS:
+            invalid = copy.deepcopy(grouped)
+            invalid['checks'].pop(field)
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                quality.compile_request(invalid, source, p)
+
+    def test_reading_view_omits_header_only_differences_but_retains_actual_adaptations(self):
+        p, source, _, _ = compact_fixture()
+        for i, block in enumerate(source['blocks'], 1):
+            block['text'] = f'镜头{i}，【时长】3s。【镜头设计】{block["design"]}。【镜头内容】{block["generation_text"]}'
+        view = quality.reading_view(source, p)
+        self.assertFalse(any('original_text' in b for b in view['blocks']))
+        source['blocks'][0]['text'] += '甲说 {不要走。}'
+        view = quality.reading_view(source, p)
+        self.assertEqual(view['blocks'][0]['original_text'], source['blocks'][0]['generation_text']+'甲说 {不要走。}')
+        self.assertNotIn('original_text', view['blocks'][1])
+
     def test_retains_unedited_source_and_same_delivery_as_detailed(self):
         p, source, detailed, plan = compact_fixture()
         before = copy.deepcopy(source)

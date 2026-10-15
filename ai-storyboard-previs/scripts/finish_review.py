@@ -43,8 +43,11 @@ def validate_delivery(p, stage, project=None):
             cells[4] = f"[![{delivery_escape(sid)} · {delivery_escape(cells[5])}](<{thumb}>)](<{original}>)"
             expected[sid] = dict(cells=cells, source=source, original=original, thumb=thumb)
         files = {str(md), *(str(md.parent / item[key]) for item in expected.values() for key in ('original', 'thumb'))}
+        from repair_export import delivery_prompt_files
+        prompts = delivery_prompt_files(p, md.parent)
+        core.require(not (prompts & files), 'Prompt export overlaps frozen report/images')
         core.require(set(record['files']) == files
-                     and {str(f.resolve()) for f in md.parent.rglob('*') if f.is_file()} == files,
+                     and {str(f.resolve()) for f in md.parent.rglob('*') if f.is_file()} == files | prompts,
                      'Delivery file set differs from the report and original images')
     pictures = 0
     for row in rows:

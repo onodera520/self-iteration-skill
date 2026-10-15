@@ -105,6 +105,14 @@ class VisualOnlyTests(unittest.TestCase):
         for text in ('她说“别走”', '他开口', '内心OS {等3秒。}', '他对她说：别走', 'voiceover: hello'):
             self.assertTrue(prompt.speech_signals(text), text)
 
+    def test_silent_mouth_prohibitions_do_not_hide_positive_speech(self):
+        for text in ('人物不说话，不做说话口型。', '所有人物均不做说话口型。',
+                     '禁止开口说话，抬手指向门。', '无说话口型，不要出现字幕。'):
+            self.assertEqual(prompt.speech_signals(text), [], text)
+        for text in ('人物不说话，随后她开口说话。', '不做说话口型，但旁白继续。',
+                     '人物不得不说话。', '人物不能不说话。', '禁止不说话。'):
+            self.assertTrue(prompt.speech_signals(text), text)
+
 
 if __name__ == '__main__':
     unittest.main()

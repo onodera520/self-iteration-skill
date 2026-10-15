@@ -15,6 +15,11 @@ from evidence_runtime import evidence_operation, verified_read
 CHECKS = ('story_coverage', 'actors_and_targets', 'objects_and_states',
           'action_order_and_phases', 'spatial_continuity', 'visible_evidence',
           'assets_and_style', 'timing_and_density', 'conflicts_and_repetition')
+CHECK_GROUPS = dict(
+    story=('story_coverage', 'action_order_and_phases'),
+    subjects=('actors_and_targets', 'objects_and_states', 'spatial_continuity'),
+    visual=('visible_evidence', 'assets_and_style', 'conflicts_and_repetition'),
+    generation=('timing_and_density',))
 
 
 def sources(block):
@@ -67,6 +72,12 @@ def compact_template(request):
                 checks={name: '' for name in CHECKS}, unresolved=[], model_risks=[])
 
 
+def batch_template(request):
+    plan = compact_template(request)
+    plan.update(plan_version=3, checks={name: '' for name in CHECK_GROUPS})
+    return plan
+
+
 def reading_view(request, p):
     """One complete semantic view, without the redundant rendered source prompt.
 
@@ -80,8 +91,16 @@ def reading_view(request, p):
             grouped.setdefault(value, []).append(path)
         row = dict(shot_id=block['shot_id'], design=block['design'],
                    sources=[dict(paths=paths, text=value) for value, paths in grouped.items()])
-        if block.get('text') != block['generation_text']:
-            row['original_text'] = block['text']
+        original = block.get('text', block['generation_text'])
+        header = repair_prompt.HEADER.fullmatch(original)
+        if header:
+            original = header['body'].strip()
+            if _normalized(header['design']) != _normalized(block['design']):
+                row['original_design'] = header['design'].strip()
+        elif original.lstrip().startswith('【镜头内容】'):
+            original = original.lstrip()[len('【镜头内容】'):].strip()
+        if _normalized(original) != _normalized(block['generation_text']):
+            row['original_text'] = original
         if block.get('keyframe_target'):
             row['target_phase'] = block['keyframe_target']['phase']
         blocks.append(row)
@@ -145,15 +164,18 @@ def validate_compact(plan, request):
             check('【' not in content, f'{sid}: compiled content must not contain extra headers/internal labels')
     notes = plan.get('notes')
     notes = notes if isinstance(notes, dict) else {}
-    required = set(attention_shots(request)) | set(edited)
+    grouped = plan.get('plan_version') == 3
+    required = set() if grouped else set(attention_shots(request)) | set(edited)
     check(isinstance(plan.get('notes'), dict) and set(notes) <= set(ids) and
           all(nonempty(note) for note in notes.values()), 'notes must map source shot IDs to concrete resolutions')
     check(required <= set(notes), 'supplemental-source/edited shots need a resolution note: ' +
           ', '.join(sid for sid in ids if sid in required and sid not in notes))
     checks = plan.get('checks')
     checks = checks if isinstance(checks, dict) else {}
-    check(set(checks) == set(CHECKS), 'complete the nine batch semantic checks')
-    for name in CHECKS:
+    names = CHECK_GROUPS if grouped else CHECKS
+    check(set(checks) == set(names), 'complete the four grouped semantic judgments' if grouped else
+          'complete the nine batch semantic checks')
+    for name in names:
         check(nonempty(checks.get(name)), f'{name}: a concrete batch judgment is required')
     check(plan.get('unresolved') == [], 'resolve prompt conflicts before export; do not relabel them as model risks')
     risks = plan.get('model_risks')
@@ -164,7 +186,7 @@ def validate_compact(plan, request):
 
 def validate(plan, request):
     if isinstance(plan, dict) and 'plan_version' in plan:
-        core.require(type(plan['plan_version']) is int and plan['plan_version'] == 2,
+        core.require(type(plan['plan_version']) is int and plan['plan_version'] in (2, 3),
                      'Unsupported prompt plan_version')
         return validate_compact(plan, request)
     errors = []
@@ -243,7 +265,7 @@ def compile_request(plan, source, p):
     descriptions = {asset['id']: asset.get('description', '') for asset in p['assets']}
     result['asset_descriptions'] = [dict(id=asset['id'], description=descriptions[asset['id']])
                                     for asset in result['assets']]
-    if plan.get('plan_version') == 2:
+    if plan.get('plan_version') in (2, 3):
         edits = {row['shot_id']: row['content'] for row in plan['edits']}
         for block in result['blocks']:
             block['compiled_content'] = edits.get(block['shot_id'], block['generation_text'])
@@ -289,7 +311,7 @@ def main():
     ap.add_argument('plan_file')
     ap.add_argument('--apply', action='store_true', help='check and register the completed plan under the project lock')
     ap.add_argument('--detailed', action='store_true', help='prepare a detailed per-source-excerpt draft')
-    ap.add_argument('--output', help='finish: separate user-facing Markdown output')
+    ap.add_argument('--output', help='finish: final Markdown path, including the current image case')
     args = ap.parse_args()
     core.require(args.action == 'check' or not args.apply, '--apply is only for check')
     core.require(args.action == 'prepare' or not args.detailed, '--detailed is only for prepare')
@@ -297,7 +319,12 @@ def main():
     with core.locked(args.project):
         p = core.read(args.project)
         if args.action == 'finish':
-            record = finish_plan(p, args.project, args.group, core.read(args.plan_file), args.output)
+            data = core.read(args.plan_file)
+            if isinstance(data, dict) and 'work_version' in data:
+                from prompt_work import finish
+                record, p = finish(p, args.project, args.group, data, args.output)
+            else:
+                record = finish_plan(p, args.project, args.group, data, args.output)
             core.save(args.project, p)
             print('Audited prompt exported: ' + record['path'])
             return

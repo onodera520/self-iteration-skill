@@ -59,7 +59,9 @@ prepare --original-prompt 只记路径，达到阈值才读取并登记 source_s
 
 ## 默认导出与交付
 
-审查报告先冻结，达到阈值就继续优先导出，不能把报告已完成当成本次交付全部完成。complete 已生成 PROMPT.view.json／PROMPT.json 就直接填写；否则按 FINISH_REPORT.prompt_inputs 的内部准备清单同批补齐，不轮流试错，不重跑有效审查。必要画幅等信息取得后直接续接。再直接准备一次，由 prepare 核验并刷新仅风格造成的绑定变化：
+新任务优先按 FINISH.view 的 prompt_work_view 读取一次，填写 prompt_work 并直接 finish 到 prompt_output；work 合并缺项准备和版本3四组审计，不另写项目字段、逐镜重复说明或先 prepare 再填写第二份计划。工具维护原资产 SHA、视觉转换来源 SHA 和原提示词绑定，仍核对全部镜头、一秒可行性及全部独立要求。新提示词直接新增到当前 case 并登记独立冻结指纹，报告和原图不改写；不需要先导出到其他目录再复制。以下为没有 work 文件的历史入口：
+
+审查报告先冻结，达到阈值就继续优先导出，不能把报告已完成当成本次交付全部完成。complete 已生成 PROMPT.view.json／PROMPT.json 就直接填写；否则按 FINISH_REPORT.prompt_inputs 的内部准备清单同批补齐，不轮流试错，不重跑有效审查。混用画幅自动选取，不作为缺项询问。再直接准备一次，由 prepare 核验并刷新仅风格造成的绑定变化：
 
 ```text
 python scripts/repair_quality.py prepare PROJECT.json G01 PROMPT_INTERNAL/PROMPT.json
@@ -68,4 +70,4 @@ python scripts/repair_quality.py finish PROJECT.json G01 PROMPT_INTERNAL/PROMPT.
 
 全镜按 [九项编排检查](prompt-quality.md)一次核对，精简计划只填必要 edits／notes 与具体检查结论。finish 在同一锁内重建来源、验证计划、导出并保存内部快照；不重复 check／export 或手写交付。
 
-共同显示画幅沿用原图；混用时导出前明确 storyboard_target_aspect，不裁图。原资产、图片、脚本、要求、画幅或参考筛选变化后重新准备对应绑定，不手改指纹绕过。工具验证结构及来源，语义保真、可见性与一秒可行性由代理判断。流程到文本交付停止，由用户自行生成。
+共同显示画幅沿用原图；混用时按整批每镜对应图的数量采用最多画幅，同一比例不同分辨率合并，按 EXIF 方向计算，数量并列取原镜序最先出现者，不询问、不裁图。仅用户另有明确指定时使用 storyboard_target_aspect，自动选择不写入该覆盖字段。原资产、图片、脚本、要求、画幅或参考筛选变化后重新准备对应绑定，不手改指纹绕过。工具验证结构及来源，语义保真、可见性与一秒可行性由代理判断。流程到文本交付停止，由用户自行生成。

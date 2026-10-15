@@ -26,6 +26,10 @@ NEGATIVE = re.compile(
     r'(?:任何|出现|输出|生成|添加)?'
     r'(?:对白|台词|旁白|独白|配音|字幕|屏幕文字|人声|音乐|音效|声音|声响)'
     r'(?:(?:、|和|或|及)(?:对白|台词|旁白|独白|配音|字幕|屏幕文字|人声|音乐|音效|声音|声响))*')
+NEGATIVE_SPEECH = re.compile(
+    r'(?<!不得)(?<!不能)(?<!不可)(?<!禁止)(?<!不许)(?<!不要)'
+    r'(?:没有|不要|不得|禁止|不允许|不准|不许|避免|不|无)'
+    r'(?:做|作|进行|出现|生成)?(?:任何)?(?:说话口型|讲话口型|说话|讲话|开口(?:说话|讲话)?)')
 TAGS = ('【时长】', '【生成时长】', '【镜头设计】', '【镜头内容】')
 HEADER = re.compile(
     r'\A\s*镜头\s*(?P<number>\d+)\s*[,，：:]?\s*'
@@ -47,7 +51,8 @@ class PreparationError(ValueError):
 
 def speech_signals(text):
     """Ignore explicit prohibitions, never delete whole clauses or alter actions."""
-    return list(dict.fromkeys(m.group() for m in SPEECH.finditer(NEGATIVE.sub('', text))))
+    visible = NEGATIVE.sub('', NEGATIVE_SPEECH.sub('', text))
+    return list(dict.fromkeys(m.group() for m in SPEECH.finditer(visible)))
 
 
 class VisualOnly:

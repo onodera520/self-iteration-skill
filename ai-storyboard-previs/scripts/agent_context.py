@@ -178,7 +178,8 @@ def cli_summary(action, result, run_dir=None):
     if action != 'complete':
         return result
     summary = {key: result[key] for key in ('status', 'seconds', 'prompt_status', 'prompt_next_action',
-               'prompt_inputs', 'prompt_plan', 'delivery_next_action', 'error') if key in result}
+               'prompt_inputs', 'prompt_plan', 'prompt_work', 'prompt_work_view', 'prompt_output',
+               'delivery_next_action', 'error') if key in result}
     if run_dir is not None:
         directory = Path(run_dir).resolve()
         summary['finish_report'] = str(directory / 'FINISH_REPORT.json')

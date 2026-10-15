@@ -485,6 +485,7 @@ def complete(project, worklist_file, output, run_dir, profile=None, target_aspec
                 if decision['triggered']:
                     report['delivery_next_action'] = '审查报告已冻结；达到阈值，下一优先事项是导出整批新视频提示词，完成后再结束交付。无需重看报告或图片。'
                     import repair_quality
+                    work = None
                     try:
                         source = repair_quality.source_request(p, project, ctx['group_id'])
                     except (ValueError, OSError, UnicodeError) as exc:
@@ -494,12 +495,24 @@ def complete(project, worklist_file, output, run_dir, profile=None, target_aspec
                             inputs_file = run_dir / 'PROMPT.inputs.json'
                             core.save(inputs_file, exc.inputs)
                             report['prompt_inputs'] = str(inputs_file)
+                            if 'prompt_context' in exc.inputs:
+                                from prompt_work import packet
+                                work = packet(p, project, ctx['group_id'], inputs=exc.inputs)
                     else:
                         core.save(run_dir / 'PROMPT.source.json', source)
                         core.save(run_dir / 'PROMPT.view.json', repair_quality.reading_view(source, p))
                         core.save(run_dir / 'PROMPT.json', repair_quality.compact_template(source))
                         report.update(prompt_status='needs_semantic_review', prompt_plan=str(run_dir / 'PROMPT.json'),
                             prompt_next_action='优先按 PROMPT.view.json 核对已有可见剧情并填写计划，然后 finish 导出；不检查对白内容及含义，不重跑有效审查。')
+                        from prompt_work import packet
+                        work = packet(p, project, ctx['group_id'], source=source)
+                    if work is not None:
+                        core.save(run_dir / 'PROMPT.work.json', work['work'])
+                        core.save(run_dir / 'PROMPT.work.view.json', work['view'])
+                        report.update(prompt_work=str(run_dir / 'PROMPT.work.json'),
+                            prompt_work_view=str(run_dir / 'PROMPT.work.view.json'),
+                            prompt_output=str(output / f"{ctx['group_id']}_新视频提示词.md"),
+                            prompt_next_action='只读 PROMPT.work.view.json，集中填写 PROMPT.work.json 的 preparation、必要 edits 和四组结论，随后直接 repair_quality.py finish 导出到 prompt_output；无需 prepare、重抄指纹或逐镜重复说明。')
                 else:
                     report['prompt_status'] = 'below_threshold'
             core.save(project, p)

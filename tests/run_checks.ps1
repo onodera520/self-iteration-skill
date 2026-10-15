@@ -21,6 +21,8 @@ if ($ImagesOnly) {
     & $python -m unittest discover -s $PSScriptRoot -p test_storyboard_conclusions.py -v
     if ($LASTEXITCODE -ne 0) { throw 'Concise conclusion tests failed' }
     & $python -m unittest discover -s $PSScriptRoot -p test_storyboard_images.py -v
+    if ($LASTEXITCODE -ne 0) { throw 'Storyboard image tests failed' }
+    & $python -m unittest discover -s $PSScriptRoot -p test_prompt_work.py -v
 } else {
     & $python -m unittest discover -s $PSScriptRoot -v
 }

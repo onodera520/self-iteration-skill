@@ -1,6 +1,6 @@
 # 首次交付前的通用提示词编排
 
-默认图片来源绑定 provided 原图与 source_fingerprint；计划覆盖整批全部脚本镜头。共同显示画幅直接沿用，混用图片在导出前确定目标画幅，不裁图。图片、原资产、脚本、要求、原提示词及其筛选或目标画幅改变后重新准备计划。complete 已生成 PROMPT.view.json／PROMPT.json 时直接阅读并填写，无需再 prepare。图像审查和冻结完成后，提示词缺项可单独补齐，不能把单张图无法证明动作过程当成返修依据。
+默认图片来源绑定 provided 原图与 source_fingerprint；计划覆盖整批全部脚本镜头。画幅按整批分镜图数量自动取最多的显示画幅，同一比例不同分辨率合并，数量并列取原镜序最先出现者，不询问、不裁图；用户另有明确指定时才使用目标画幅。图片、原资产、脚本、要求、原提示词及其筛选或目标画幅改变后重新准备计划。complete 已生成 PROMPT.view.json／PROMPT.json 时直接阅读并填写，无需再 prepare。图像审查和冻结完成后，提示词缺项可单独补齐，不能把单张图无法证明动作过程当成返修依据。
 
 阈值触发、基础准备有效后必读。本规则适用于任何题材的分镜预演，不把某个案例的镜子、人物、场景或动作作为通用要求。目标是代理在同一准备批次中完成整合与自检，向用户交付一份经过核对的完整提示词；不是宣称一次生成必然通过。
 
@@ -32,7 +32,15 @@
 
 ## 一次准备与工具门禁
 
-缺项时先读 FINISH_REPORT.prompt_inputs 指向的 PROMPT.inputs.json，一次完成资产风格、必要纯视觉转换、可选旧提示词筛选和目标画幅，再直接 prepare；不逐项试错、单独 decide 或重跑 complete。随后：
+默认采用 `PROMPT.work.json`：complete 同时提供自包含的 `PROMPT.work.view.json`，一次展示全镜正文、补充来源、必要原文、原资产路径与风格、待补纯视觉文本及可选原提示词。只读 work.view，集中填写 work 的 preparation 和 plan 后，直接 `repair_quality.py finish PROJECT.json G01 PROMPT.work.json --output case/G01_新视频提示词.md`。不再单独准备、读取新 view 后第二次填写。工具按原绑定核对工作单，补齐准备元数据，在一次证据周期内构建最终来源并导出；输入改变、空白审计、实际说话指令或硬冲突仍阻止导出，失败不提交项目准备数据。
+
+work 的 `plan_version=3` 用 `story/subjects/visual/generation` 四句具体判断覆盖上面的全部九项检查；`checks_passed`、`preserves_story` 和全镜有序 `reviewed_shot_ids` 仍须明确确认。只写必要 edits，未改正文精确沿用；notes 仅记录确需说明的歧义，不再强制每个修改与补充来源另写一遍。preparation 只接受工具列出的资产可见事实／指导、纯视觉文本及一份保真依据、原提示词筛选；哈希和绑定由工具填写，不能修改脚本或实际审查。所有语义仍需逐镜核对，工具不自动确认。
+
+阅读视图不再为仅去掉镜号／时长／设计头的正文重复展示完整原文；实际视觉转换及设计变化才保留对应原文。新提示词可直接新增到当前 case 根目录或 `新视频提示词/`，独立登记文件及请求快照指纹。报告和原图的冻结清单保持原样，新增提示词必须已登记且未改动；其他多余文件仍不接受，历史交付及已有不同内容不可覆盖。
+
+以下 prepare／精简计划版本2／详细计划接口仅用于历史恢复或单独诊断：
+
+缺项时先读 FINISH_REPORT.prompt_inputs 指向的 PROMPT.inputs.json，一次完成资产风格、必要纯视觉转换和可选旧提示词筛选，再直接 prepare；input_aspect 已给出自动选择的画幅，不作为待确认项。不逐项试错、单独 decide 或重跑 complete。随后：
 
 ```text
 python scripts/repair_quality.py prepare PROJECT.json G01 INTERNAL_DIR/PROMPT_PLAN.json
@@ -44,7 +52,7 @@ prepare 生成草稿、`.source.json` 完整快照和 `.view.json` 阅读视图�
 
 准备仍缺项时集中报出，并写 `.inputs.json`：原资产顺序／原图路径／SHA、需转换字段原文／SHA、已冻结旧提示词及画幅信息。代理据此填项目中的对应字段，不能从空模板自动批准；修正后使用新的内部计划路径。该文件不替代来源，也无需用户登记。prepare 仅能刷新资产风格准备造成的绑定变化；图片、脚本、原资产或审查变化必须先重新核验。prepare／finish 各在一次证据周期内复用读取，保存或导出前重验全部文件内容；finish 不刷新旧计划。
 
-默认 `plan_version: 2` 精简草稿：
+历史 `plan_version: 2` 精简草稿：
 
 - `source_fingerprint`：工具提供，绑定完整来源请求，包括脚本、审查、修正、纯视觉视图、资产、参考筛选与参数。
 - `preserves_story: true` 与 `reviewed_shot_ids`：实际核对可见剧情后确认，排除对白文字及含义；镜号按原序全部覆盖一次，不能由模板预先批准。

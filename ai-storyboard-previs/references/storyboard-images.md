@@ -104,13 +104,15 @@ complete 在同一锁和证据周期内恢复完整审查、核验、记录、�
 
 ## 阈值与新视频提示词
 
+达到阈值时优先使用 complete 返回的 prompt_work／prompt_work_view／prompt_output：一次读取自包含的 work.view，集中补 preparation、必要 edits 与四组判断，直接 finish 导出到同一 case。work 绑定全部来源，工具维护 SHA 与元数据；来源改变即拒绝旧 work。旧 prompt_plan／prompt_inputs 仍保存用于兼容恢复，正常新任务不同时读取这两套视图。四组记录覆盖原九项检查，空白结论、实际说话、缺镜／错序及未解决冲突仍不能导出。仅头部格式不同的原文不再重复显示，真实视觉转换仍留原文。提示词作为独立登记且不可改写的新增交付，报告和所有图片保持原冻结清单。
+
 按整批全部原镜号计算：一处关键剧情错误，或一处妨碍必要内容辨认的严重画面损坏，或普通明确错误至少两镜且占全批至少 20%。一镜多个问题只计一次；2/10 触发、2/11 不触发。uncertain、输入错误与合理差异不计分子；待核查、分组或省图不缩小分母。普通明确错误无需附加 affects_story=true 门槛；关键／严重损坏仍须充分剧情影响证据。未达阈值的 FAIL 继续如实保留。
 
 未达阈值时不读取或分析原生成提示词，也不准备新提示词。只有路径保存在内部 deferred_storyboard_prompts；显式 API 文本同样延后登记，不进入审查上下文。触发后才读取原文，保存在 source_storyboard_prompts 并冻结来源，后续筛选复用该原文。文件缺失、编码错误或筛选缺项只影响提示词准备，审查报告正常完成；尚未读成功的文件可补齐后在提示词准备阶段继续读取。
 
-达到阈值后，下一优先事项是导出整批所有镜头的新视频提示词，导出后再结束交付，用户自行生成。complete 若来源就绪，会同时写入 PROMPT.source.json、PROMPT.view.json、PROMPT.json；代理阅读视图，集中核对／修改精简计划，再用 repair_quality.py finish 导出。若缺资产风格、旧提示词筛选、纯视觉转换或混用画幅的目标，报告先正常完成，FINISH_REPORT 标 prompt_status=needs_preparation，一次汇总缺项并给出 prompt_inputs 路径。PROMPT.inputs.json 保留原资产路径／SHA、需转换原文／SHA、旧提示词来源及画幅，并明确可见剧情保真范围；代理据此同批补齐项目字段，再直接 repair_quality.py prepare／finish，不单独 decide 或重做仍有效的视觉判断。需要用户决定的目标画幅等必要信息集中询问，取得后继续导出。prepare 只刷新风格准备变化，其他证据变化须重新核验。原提示词已登记后如主动修改须重新 register 并筛选，不能当作当前来源自动替换已冻结原文。
+达到阈值后，下一优先事项是导出整批所有镜头的新视频提示词，导出后再结束交付，用户自行生成。complete 若来源就绪，会同时写入 PROMPT.source.json、PROMPT.view.json、PROMPT.json；代理阅读视图，集中核对／修改精简计划，再用 repair_quality.py finish 导出。若缺资产风格、旧提示词筛选或纯视觉转换，报告先正常完成，FINISH_REPORT 标 prompt_status=needs_preparation，一次汇总缺项并给出 prompt_inputs 路径。PROMPT.inputs.json 保留原资产路径／SHA、需转换原文／SHA、旧提示词来源及自动选择的 input_aspect，并明确可见剧情保真范围；混用画幅不属于待确认缺项。代理据此同批补齐项目字段，再直接 repair_quality.py prepare／finish，不单独 decide 或重做仍有效的视觉判断。prepare 只刷新风格准备变化，其他证据变化须重新核验。原提示词已登记后如主动修改须重新 register 并筛选，不能当作当前来源自动替换已冻结原文。
 
-原资产对应、已有可见逐镜内容、每镜一秒和静音要求保持。对白文字及其含义不参与提示词保真或时长检查，不要求视觉转译，也不能因此停止导出；去除说话、声音和新增文字指令，保留已有动作、表情、人物与道具关系，不新增事件。preserves_story／story_basis 仅确认已有可见内容。所有图片共同画幅直接沿用；混用时导出前确定 storyboard_target_aspect（或 complete --target-aspect 宽:高），不自动裁图。旧提示词保存在 source_storyboard_prompts，绑定 source_fingerprint；repair_prompt_references 的来源字段也使用 source_fingerprint，其他筛选规则不变。它仅提供与脚本相容的视觉建议，不充当图像审查证据。
+原资产对应、已有可见逐镜内容、每镜一秒和静音要求保持。对白文字及其含义不参与提示词保真或时长检查，不要求视觉转译，也不能因此停止导出；去除说话、声音和新增文字指令，保留已有动作、表情、人物与道具关系，不新增事件。preserves_story／story_basis 仅确认已有可见内容。画幅自动按整批每镜对应图的数量选最多的显示画幅，同一比例不同分辨率合并并应用 EXIF 方向，数量并列取原镜序最先出现者；不按像素面积、时长、分组或 PASS 数加权，不询问、不裁图。混用时仅用户另有明确指定才设 storyboard_target_aspect（或 complete --target-aspect 宽:高）；自动结果不写入该覆盖字段。旧提示词保存在 source_storyboard_prompts，绑定 source_fingerprint；repair_prompt_references 的来源字段也使用 source_fingerprint，其他筛选规则不变。它仅提供与脚本相容的视觉建议，不充当图像审查证据。
 
 编排计划绑定完整来源；原资产、图片、脚本、目标画幅、原提示词或其筛选变化后必须重新准备并核验计划。项目到提示词导出停止，由用户自行生成。
 

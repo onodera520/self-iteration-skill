@@ -66,12 +66,12 @@ python scripts/prepare_storyboards.py complete PROJECT.json PREPARE_INTERNAL/WOR
 
 complete 一次展开记录、核验整批、规划、判阈值、渲染并冻结；未达阈值成功后立即交付，达到阈值则优先完成下述新提示词导出，再结束交付。不重看报告或图片，不手动重复同一校验。失败只修对应字段。输出 01_分镜图审查.md 和 images/：标题、镜头数直接接原九列表，不附流程说明或分组诊断；脚本计划时长，通过只写“符合脚本”，待核查“—／暂不省图”，无漏镜或补帧条目。命令细节才读 [图片接口](references/storyboard-images.md)。
 
-阈值：关键剧情错误一镜，或严重画面损坏一镜，或普通明确错误至少两镜且占整批≥20%；2/10触发、2/11不触发。待核查、输入问题、分组和省图不改变分母。**达到阈值后，下一优先事项就是导出整批新视频提示词**，报告冻结后立即继续；只有触发才读 [提示词编排](references/prompt-quality.md)、[提示词规则](references/auto-repair.md)及 PROMPT.view.json，读取原生成提示词。九项提示词核对在同一次阅读中按四组完成，不属于普通看图环节。缺项集中补齐，不重做有效审查；需要用户确定的目标画幅等必要信息集中询问，取得后直接继续导出。
+阈值：关键剧情错误一镜，或严重画面损坏一镜，或普通明确错误至少两镜且占整批≥20%；2/10触发、2/11不触发。待核查、输入问题、分组和省图不改变分母。**达到阈值后，下一优先事项就是导出整批新视频提示词**，报告冻结后立即继续。默认只读 FINISH.view 指向的 **PROMPT.work.view.json**：它已合并全部镜头、必要补充、资产路径、原提示词筛选来源、待补准备项和四组检查规则。一次填写 **PROMPT.work.json** 的 preparation、必要 edits 和四组具体结论，然后执行一次 `repair_quality.py finish PROJECT.json G01 PROMPT.work.json --output case/G01_新视频提示词.md`。指纹、资产 SHA、对应关系和未改正文由工具维护，不重新 prepare，不另写逐镜重复说明或九份审计文字；四组仍覆盖全部九项检查，不自动批准空字段。正常任务不再读其他提示词资料；历史任务无 work 文件或需要特殊诊断时才查 [提示词编排](references/prompt-quality.md)及 [提示词规则](references/auto-repair.md)。
 
-提示词只核对**可见剧情保真**：保留脚本已有的人物、动作、表情、位置、道具关系、镜序和必要切镜。**对白文字及其含义不参与提示词保真或时长检查，也不要求把对白独有信息转成画面，不能以其无法无声表达为由停止导出。** 去除说话表演、声音和新增文字指令，不为承接对白发明动作、人物、道具或事件；内部 preserves_story／story_basis 也只确认已有可见内容。finish 导出全部镜头，每镜1秒、静音、无说话口型、无新增文字，保留原资产；共同画幅沿用，混用先确定目标，不自动裁图。导出后再结束交付，由用户自行生成；用户明确只要报告时按其要求执行。
+提示词只核对**可见剧情保真**：保留脚本已有的人物、动作、表情、位置、道具关系、镜序和必要切镜。**对白文字及其含义不参与提示词保真或时长检查，也不要求把对白独有信息转成画面，不能以其无法无声表达为由停止导出。** 去除说话表演、声音和新增文字指令，不为承接对白发明动作、人物、道具或事件；内部 preserves_story／story_basis 也只确认已有可见内容。finish 导出全部镜头，每镜1秒、静音、无说话口型、无新增文字，保留原资产。**画幅自动采用整批分镜图中数量最多的显示画幅；数量并列取原镜序中最先出现者，不询问确认。** 按每镜对应图计数，同一比例的不同分辨率合并，不按像素面积、时长、分组或通过数加权，不裁图；仅用户另有明确指定时才使用目标画幅。导出后再结束交付，由用户自行生成；用户明确只要报告时按其要求执行。
 
 ## 中断恢复
 
-实际观察与判断逐页落盘。摘要保留 RUN.json 绝对路径、阶段、下一步。压缩后读 RUN.json，执行 resume PROJECT.json PREPARE_INTERNAL；需定位才加 --page 或 --shots。只继续未记录／不完整项目，已存事实直接复用；uncertain 留在报告，不排复查。未落盘且无法确认的判断保留待核查，不能凭摘要 PASS。已 complete 只读 FINISH.view.json：below_threshold 直接交付，needs_preparation／needs_semantic_review 优先续接提示词导出；complete 的 status 只表示审查报告完成，不表示达阈值后的提示词已交付。不重复 prepare／complete。
+实际观察与判断逐页落盘。摘要保留 RUN.json 绝对路径、阶段、下一步。压缩后读 RUN.json，执行 resume PROJECT.json PREPARE_INTERNAL；需定位才加 --page 或 --shots。只继续未记录／不完整项目，已存事实直接复用；uncertain 留在报告，不排复查。未落盘且无法确认的判断保留待核查，不能凭摘要 PASS。已 complete 只读 FINISH.view.json：below_threshold 直接交付，其他状态优先按 prompt_work／prompt_work_view／prompt_output 续接集中填写与直接导出；旧任务没有 work 时才按 prompt_plan／prompt_inputs 恢复。complete 的 status 只表示审查报告完成，不表示达阈值后的提示词已交付。不重复 prepare／complete。
 
 图片、脚本、资产、要求或分组变化使相关结论失效，另存新审查，旧交付冻结。workflow=storyboard_images，source.kind=provided，无视频时间戳。历史项目未设置新策略时保留原上下文与交付兼容。计时／调优才读 [执行提效](references/efficiency.md)，程序耗时不能冒充模型端到端耗时。

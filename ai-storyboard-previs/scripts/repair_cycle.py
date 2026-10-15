@@ -131,7 +131,8 @@ def refresh_prompt_style(p, project, gid):
 
     Style is supplied after the threshold is known. Updating that preparation
     data does not change image judgments or the set of allowed corrections.
-    Finish never calls this helper and continues to reject stale plans.
+    Legacy plan finish never refreshes. The one-work finish may refresh only
+    after verifying its complete pre-preparation input fingerprint.
     """
     d = p.get('repair_decisions', {}).get(gid)
     if not d:
@@ -315,6 +316,17 @@ def _compose_prompt(p, project, gid, version, input_aspect=False, reference_snap
             from storyboard_inputs import inputs as image_inputs
             inputs['input_ratios'] = list(dict.fromkeys(row['aspect_ratio'] for row in image_inputs(p, project)))
             inputs['storyboard_target_aspect'] = p.get('storyboard_target_aspect')
+            if shape:
+                inputs['input_aspect'] = copy.deepcopy(shape)
+        # A complete reading context lets one submission resolve preparation and
+        # compile the batch without another prepare/read/fill round.
+        inputs['prompt_context'] = dict(source_group_id=gid, decision_fingerprint=d['fingerprint'],
+            binding=copy.deepcopy(d['binding']), blocks=copy.deepcopy(blocks), assets=copy.deepcopy(assets),
+            asset_style=copy.deepcopy(style) if style else dict(assets=[dict(asset_id=a['id'],
+                visible_style_facts=[], guidance='') for a in assets]),
+            previs_directive=PREVIS_DIRECTIVE, duration_seconds=float(len(ss)), aspect_ratio=aspect,
+            input_aspect=copy.deepcopy(shape), format_requirements=copy.deepcopy(format_requirements),
+            visual_adaptations=copy.deepcopy(visual.used), source_prompt_reference=copy.deepcopy(reference))
         raise repair_prompt.PreparationError(preparation_errors, inputs)
     seconds = len(ss)
     result = dict(source_group_id=gid,

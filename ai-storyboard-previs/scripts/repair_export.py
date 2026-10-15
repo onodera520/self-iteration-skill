@@ -52,7 +52,8 @@ def render_prompt(p, request):
              '小幅运动仍须清楚呈现原脚本的关键动作和结果，全部镜头按上述顺序各自独立硬切，不得遗漏、合并或重排',
              repair_prompt.SILENT_DIRECTIVE]
     fixed.extend(request.get('format_requirements', []))
-    origin = '分镜图的共同画幅' if request['input_aspect']['selection'] == 'common_images' else '已确定的目标画幅'
+    origin = {'common_images': '分镜图的共同画幅', 'most_images': '画幅'}.get(
+        request['input_aspect']['selection'], '已确定的目标画幅')
     fixed.append(f'采用{origin} {request["aspect_ratio"]}')
     lines += ['', _sentences(fixed)]
     style = []
@@ -78,16 +79,50 @@ def export_prompt(p, project, gid, output):
     return _export_request(p, project, gid, output, repair.make_prompt(p, project, gid))
 
 
+def check_output(p, output):
+    """Current image cases accept new prompts; frozen evidence is never a target."""
+    output = Path(output).resolve()
+    core.require(output.suffix.lower() == '.md', 'Prompt delivery must be a Markdown file')
+    current = p.get('repair_deliveries', {}).get('original')
+    frozen = list(p.get('repair_deliveries', {}).values())
+    frozen += [item['record'] for item in p.get('repair_delivery_history', [])]
+    for record in frozen:
+        root = Path(record['path']).resolve().parent
+        if not output.is_relative_to(root):
+            continue
+        core.require(record is current and record.get('delivery_format_version', 1) >= 3
+                     and output.parent in (root, root / '新视频提示词')
+                     and str(output) not in record['files'],
+                     'Prompt output would modify a frozen report/image or historical delivery')
+        from finish_review import intact
+        intact(record)
+        delivery_prompt_files(p, root)
+
+
+def delivery_prompt_files(p, root):
+    """Only registered, unchanged prompt exports may extend a case's file set."""
+    root, result = Path(root).resolve(), set()
+    for history in p.get('repair_prompt_exports', {}).values():
+        for record in history:
+            path = Path(record['path']).resolve()
+            if not path.is_relative_to(root):
+                continue
+            source = Path(record['request_path']).resolve()
+            core.require(path.parent in (root, root / '新视频提示词') and path.suffix.lower() == '.md'
+                         and not source.is_relative_to(root), 'Invalid prompt export location in delivery')
+            core.require(path.is_file() and core.sha(path) == record['sha256']
+                         and source.is_file() and core.sha(source) == record['request_sha256'],
+                         'Immutable prompt export changed')
+            result.add(str(path))
+    return result
+
+
 def _export_request(p, project, gid, output, request):
     """Internal writer for a freshly compiled request, under the caller's lock."""
     import repair_cycle as repair
 
     project, output = Path(project).resolve(), Path(output).resolve()
-    core.require(output.suffix.lower() == '.md', 'Prompt delivery must be a Markdown file')
-    frozen = list(p.get('repair_deliveries', {}).values())
-    frozen += [item['record'] for item in p.get('repair_delivery_history', [])]
-    core.require(all(not output.is_relative_to(Path(record['path']).resolve().parent) for record in frozen),
-                 'Use a separate prompt directory outside frozen deliveries')
+    check_output(p, output)
     # Reuse the complete source/evidence/visual-text checks. Workflow availability,
     # provider limits and payment allowance are not prerequisites for a text export.
     repair_prompt.validate(request, [block['shot_id'] for block in request['blocks']])

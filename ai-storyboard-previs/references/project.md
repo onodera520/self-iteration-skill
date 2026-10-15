@@ -24,11 +24,11 @@ deferred_storyboard_prompts 只保存原提示词路径或延后文本，未达�
 
 repair_baseline 冻结 source_script、逐镜原文及设计、逐字摘录的 video_format_requirements。repair_decisions 绑定当前审查、聚合、原资产和基线；每个确认 FAIL 有一条 repair_assessment，阈值见 [返修证据](repair-assessments.md)。达到阈值后优先填写 repair_asset_style、必要 repair_visual_adaptations 和原提示词筛选，完成整批提示词导出。提示词 preserves_story／story_basis 仅确认保留已有可见剧情，排除对白文字及其含义；不要求视觉转译对白，不因其无法无声表达停止导出。
 
-提示词来源 request prompt_version=5，经过全镜编排的请求为 version=6；不改原 script、duration 或 baseline。默认精简计划 plan_version=2 仅记录必要 edits／notes 与九项具体结论，仍确认全部镜号已核对，详见 [编排规则](prompt-quality.md)。
+提示词来源 request prompt_version=5，经过全镜编排的请求为 version=6；不改原 script、duration 或 baseline。默认 prompt_work 内的 plan_version=3 只记录必要 edits 与覆盖九项检查的四组具体结论，notes 按需，仍确认全部镜号已核对；版本2及详细计划继续兼容，详见 [编排规则](prompt-quality.md)。
 
 ## 固定交付
 
-公开目录仅有 01_分镜图审查.md 与 images/：一张九列表，全部原图与展示缩略图。PASS 的问题栏只写“符合脚本”；待核查显示“—／暂不省图”。省图依据在专列，所有原镜与原图仍保留。达阈值且准备有效时另在独立目录输出 G01_新视频提示词.md，内部 JSON 不外放。
+公开目录仅有 01_分镜图审查.md 与 images/：一张九列表，全部原图与展示缩略图。PASS 的问题栏只写“符合脚本”；待核查显示“—／暂不省图”。省图依据在专列，所有原镜与原图仍保留。达阈值优先在同一 case 根目录或新视频提示词/ 新增 G01_新视频提示词.md，单独登记文件与请求指纹，原报告和图片清单不改写；内部 JSON 不外放。prompt_work 将准备与四组审计合并为一次提交，历史计划版本2及详细计划继续兼容。
 
 delivery_format_version=3 在冻结前自动核对九列与当前已完成审查、逐镜对应／原图哈希、链接、缩略图预览、覆盖、顺序及文件集合。未达阈值通过后直接交付，达阈值优先导出提示词后再结束交付，不重复人工逐镜核对。失败定位对应部分。不能用机械校验代替初次视觉判断。
 

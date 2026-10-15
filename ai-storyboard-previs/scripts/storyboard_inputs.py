@@ -1,6 +1,7 @@
 """Ordered, user-paired storyboard images. No video processing or inferred matches."""
 from __future__ import annotations
 import copy
+from collections import Counter
 from fractions import Fraction
 from pathlib import Path
 import uuid
@@ -233,14 +234,22 @@ def record_review(p, project, review):
 def source_aspect(p, project, expected):
     rows = inputs(p, project)
     core.require(core.digest(rows) == expected, '图片已变化，请重新校对并判断阈值')
-    ratios = list(dict.fromkeys(r['aspect_ratio'] for r in rows))
+    counts = Counter(r['aspect_ratio'] for r in rows)
+    ratios = list(counts)
     target = ratios[0] if len(ratios) == 1 else p.get('storyboard_target_aspect')
-    core.require(target, '分镜图混用画幅；校对可完成，导出提示词前请确定 storyboard_target_aspect')
+    selection = 'common_images' if len(ratios) == 1 else 'explicit_target'
+    if not target:
+        # Count every paired shot; ties follow the authoritative script/image order.
+        target = max(ratios, key=counts.get)
+        selection = 'most_images'
     try:
         ratio = Fraction(str(target).replace(':', '/'))
         core.require(ratio > 0, '目标画幅必须为正数')
     except (ValueError, ZeroDivisionError):
         raise ValueError('目标画幅应为宽:高，例如 16:9') from None
-    return dict(policy=1, source_kind='provided', source_fingerprint=expected,
-                aspect_ratio=f'{ratio.numerator}:{ratio.denominator}', input_ratios=ratios,
-                selection='common_images' if len(ratios) == 1 else 'explicit_target')
+    result = dict(policy=1, source_kind='provided', source_fingerprint=expected,
+                  aspect_ratio=f'{ratio.numerator}:{ratio.denominator}', input_ratios=ratios,
+                  selection=selection)
+    if selection == 'most_images':
+        result.update(policy=2, input_ratio_counts=dict(counts))
+    return result

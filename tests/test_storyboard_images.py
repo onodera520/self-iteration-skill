@@ -525,16 +525,46 @@ class StoryboardImagesTests(fixtures.Base):
         self.assertNotIn('输入视频画幅',text)
         self.assertFalse(hasattr(repair, 'submit'))
 
-    def test_mixed_aspect_reviews_finish_before_target_is_required(self):
+    def test_mixed_aspect_uses_most_images_and_exports_without_cropping(self):
         Image.new('RGB',(90,160),'green').save(self.p['storyboard_images'][0]['path'])
         self.ready(fails=['S02'],critical=True)
         repair.snapshot(self.p,self.path,self.path.parent/'delivery','original')
-        with self.assertRaisesRegex(ValueError,'混用画幅'):
-            quality.source_request(self.p,self.path,'G01')
+        originals = {row['path']: Path(row['path']).read_bytes() for row in self.p['storyboard_images']}
+        request = quality.source_request(self.p,self.path,'G01')
+        self.assertEqual(request['aspect_ratio'], '16:9')
+        self.assertEqual(request['input_aspect']['selection'], 'most_images')
+        self.assertEqual(request['input_aspect']['input_ratio_counts'], {'9:16': 1, '16:9': 2})
+        self.assertNotIn('storyboard_target_aspect', self.p)
+        output = self.path.parent/'mixed-prompt.md'
+        quality.finish_plan(self.p, self.path, 'G01', self.simulated_plan(), output)
+        self.assertIn('采用画幅 16:9', output.read_text(encoding='utf8'))
+        self.assertEqual({path: Path(path).read_bytes() for path in originals}, originals)
         self.p['storyboard_target_aspect']='9:16'
         self.assertEqual(quality.source_request(self.p,self.path,'G01')['aspect_ratio'],'9:16')
         with Image.open(self.p['storyboard_images'][1]['path']) as image:
             self.assertEqual(image.size,(64,36))
+
+    def test_mixed_aspect_ties_follow_script_order_and_resolution_does_not_weight_votes(self):
+        for sizes, expected in (
+                (((90,160), (64,36), (160,90)), '16:9'),
+                (((90,160), (64,36), (64,64)), '9:16'),
+                (((160,90), (90,160), (64,64)), '16:9')):
+            with self.subTest(sizes=sizes):
+                for row, size in zip(self.p['storyboard_images'], sizes):
+                    Image.new('RGB', size, 'green').save(row['path'])
+                fingerprint = core.digest(images.inputs(self.p, self.path))
+                self.assertEqual(images.source_aspect(self.p, self.path, fingerprint)['aspect_ratio'], expected)
+
+    def test_mixed_aspect_counts_exif_display_orientation(self):
+        for row in self.p['storyboard_images'][1:]:
+            path = Path(row['path']).with_suffix('.jpg')
+            exif = Image.Exif(); exif[274] = 6
+            Image.new('RGB', (160,90), 'green').save(path, exif=exif)
+            row['path'] = str(path)
+        fingerprint = core.digest(images.inputs(self.p, self.path))
+        shape = images.source_aspect(self.p, self.path, fingerprint)
+        self.assertEqual(shape['aspect_ratio'], '9:16')
+        self.assertEqual(shape['input_ratio_counts'], {'16:9': 1, '9:16': 2})
 
     def test_hashes_reused_and_concurrent_replacement_rejected(self):
         original = self.p['storyboard_images'][0]['path']
@@ -569,7 +599,7 @@ class StoryboardImagesTests(fixtures.Base):
             batch.prepare(self.path, paths, self.path.parent/'blocked')
         self.assertEqual(self.path.read_bytes(), original)
 
-    def test_complete_prepares_prompt_once_or_defers_only_mixed_aspect(self):
+    def test_complete_prepares_prompt_for_common_and_mixed_aspects(self):
         for mixed in (False, True):
             with self.subTest(mixed=mixed):
                 if mixed:
@@ -588,15 +618,11 @@ class StoryboardImagesTests(fixtures.Base):
                 self.assertEqual(resumed['prompt_status'], result['prompt_status'])
                 self.assertEqual(resumed['delivery_next_action'], result['delivery_next_action'])
                 self.p = core.read(self.path)
-                if mixed:
-                    self.assertEqual(result['prompt_status'], 'needs_preparation')
-                    self.assertIn('混用画幅', result['prompt_next_action'])
-                    self.p['storyboard_target_aspect'] = '9:16'
-                    self.assertEqual(quality.source_request(self.p, self.path, 'G01')['aspect_ratio'], '9:16')
-                else:
-                    self.assertEqual(result['prompt_status'], 'needs_semantic_review')
-                    self.assertEqual(core.read(result['prompt_plan']), quality.compact_template(
-                        quality.source_request(self.p, self.path, 'G01')))
+                self.assertEqual(result['prompt_status'], 'needs_semantic_review')
+                source = quality.source_request(self.p, self.path, 'G01')
+                self.assertEqual(source['aspect_ratio'], '16:9')
+                self.assertEqual(source['input_aspect']['selection'], 'most_images' if mixed else 'common_images')
+                self.assertEqual(core.read(result['prompt_plan']), quality.compact_template(source))
 
     def test_original_prompt_is_bound_to_images_and_script_without_changing_review(self):
         self.ready(fails=['S02'], critical=True)
@@ -692,8 +718,11 @@ class StoryboardImagesTests(fixtures.Base):
         self.assertNotIn('prompt_plan', result)
         inputs = core.read(result['prompt_inputs'])
         self.assertIn('对白文字及其含义不参与', inputs['visual_story_rule'])
-        for term in ('repair_prompt_references', 'Asset style', '混用画幅', 'S01.generation_text'):
-            self.assertIn(term, result['prompt_next_action'])
+        for term in ('repair_prompt_references', 'Asset style', 'S01.generation_text'):
+            self.assertIn(term, '\n'.join(inputs['errors']))
+        self.assertNotIn('混用画幅', result['prompt_next_action'])
+        self.assertEqual(inputs['input_aspect']['aspect_ratio'], '16:9')
+        self.assertEqual(inputs['input_aspect']['selection'], 'most_images')
         self.assertFalse(inputs['repair_asset_style']['preserves_story'])
         self.assertEqual([row['sha256'] for row in inputs['repair_asset_style']['assets']],
                          [row['sha256'] for row in inputs['assets']])
@@ -703,7 +732,7 @@ class StoryboardImagesTests(fixtures.Base):
         frozen = {path: Path(path).read_bytes() for path in self.p['repair_deliveries']['original']['files']}
         bound = self.p['repair_decisions']['G01']['binding']
         source = inputs['original_prompt']['source']
-        self.p.update(repair_asset_style=style, storyboard_target_aspect='16:9',
+        self.p.update(repair_asset_style=style,
             repair_prompt_references={'G01': dict(source_sha256=source['text_sha256'],
                 source_fingerprint=source['source_fingerprint'], script_fingerprint=bound['script_fingerprint'],
                 preserves_story=True, compatibility_reason='SIMULATED unnecessary guidance excluded', selections=[],
