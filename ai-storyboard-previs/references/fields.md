@@ -4,7 +4,7 @@
 
 | 位置 | 必填与易错点 |
 | --- | --- |
-| INPUT facts | 普通保留图校对可省略或 []，可见事实仍须写 observation.visible_facts。明确状态建模或省图时才填：entity 精确匹配 assets[].id；attribute、value、status、critical、phase、source 齐全。status=known/unknown；phase=static/before/after；source={kind:script/asset/inference, ref:具体出处}。不要把整镜剧情写成 static 属性；没有对应资产的要求放 requirements，不造实体。未填省图依据保守保留原图 |
+| INPUT facts | 普通保留图校对可省略或 []，可见事实仍须写 observation.visible_facts。明确状态建模或省图时才填：entity 精确匹配 assets[].id（含场景资产，不能填 continuity_id）；attribute、value、status、critical、phase、source 齐全。status=known/unknown；phase=static/before/after；source={kind:script/asset/inference, ref:具体出处}。不要把整镜剧情写成 static 属性；没有对应资产的要求放 requirements，不造实体，不把推断升级为脚本事实。未填省图依据保守保留原图 |
 | INPUT requirements | status=ready；keyframe={phase:entry/action/exit, description:当前参考阶段}；provenance=[{field:所支持字段, status:observed/user_provided/script/assumed/unknown, source:具体出处}]。provenance.status 与 facts.source.kind 不是同一组枚举；过程图不强制终态，参见审查规则 |
 | INPUT state_changes | 普通校对可省略。已填写的真实变化仍须来源、authorized、before/after 及匹配的 requirements.entry_state 或明确继承；阶段及跨镜状态冲突在 prepare 检查，不等待 complete。不能为满足必填而编造变化或改名隐藏冲突 |
 | 每镜结论 | verdict=PASS/FAIL/uncertain 明确覆盖主体内容、状态承接、参考可用性三组；reference_phase=entry/action/exit/unknown；PASS 的 match_level=0–3，其他为 null。未知阶段不得 PASS |
@@ -13,6 +13,10 @@
 | unresolved | 无疑点为 []；uncertain 至少一项 {check:具体项, reason:无法确认的必要信息}。不放大、不排复查；FAIL 也可保留其他疑点 |
 | reference | 通常省略，由程序补保留图或暂不省图。仅建议省图时写 {decision:ai_fill, derivable:true, basis_shot_ids:[同组前镜,同组后镜], reason:明确推导理由}；双侧须 PASS 且保留，保护首尾及必要锚点，不自动降低省图门槛 |
 | 根字段 | reviewed_groups 固定 content/state/reference；核对分组后 grouping_checked=true；无整体限制 limitations=[]。不另写全批 checks、issues 或 repair_assessments |
+
+显式状态建模时，只用 requirements.entry_state 补新增持久状态种子，沿同 continuity_id 的 inherits_from 继承出口；state_changes 的 before 须吻合入口，并有来源与 authorized。出口由程序计算，临时姿态放 keyframe。critical 标记须有剧情依据。baseline_conflict、change_start_conflict、unexplained_after_state 在准备时集中检查；持久状态与 facts 可用同名属性，合法阶段及授权变化应一致。冲突回查来源与阶段，不能删事实、改成 note 属性或清空状态绕过。详细状态约定见 [镜头要求](shot-requirements.md#内部约定)。
+
+扩展 omission_assessment 使用 allowed、risk、rationale、source，risk 可为 low/medium/high/unknown；未判断时 allowed=null、risk=unknown 并说明未审查。intent 的 critical_result、narrative_turn、required_cut 均为布尔值。字段齐全不代表省图已获批准，仍须实际审查及双侧依据。
 
 FAIL 的 findings 每项：
 

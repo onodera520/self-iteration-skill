@@ -38,13 +38,15 @@
 
 ## 审查后的参考图选择
 
-同一次图片审查提供 shot_reviews 和 reference_assessments。逐镜结论独立，组内部分 FAIL 不妨碍其他镜头保留。先固定合法最终组，再选择参考图。省图标准见 [图片审查规则](storyboard-review.md#资产对照与省图)。
+同一次图片审查提供 shot_reviews 和 reference_assessments。逐镜结论独立，组内部分 FAIL 不妨碍其他镜头保留。先固定合法最终组，再选择参考图。规划仅在副本中将审查转为约束，不改原 facts，也不将省图建议升级为 script。省图标准见 [图片审查规则](storyboard-review.md#资产对照与省图)。
 
 组首尾、人物首次出现、场景边界、关键状态／空间变化、转折、关键结果、未知关键事实及用户锁定图作为必要锚点。普通微表情或局部手势不因单列一镜就成为关键；确有暗号、偷换等剧情作用仍保护。状态差分为零不独自证明可省图。
 
 ai_fill 需该镜 PASS、同组双侧 PASS 且保留的原图锚点，按序夹住该镜，并有当前资产及明确可推导状态依据。不能以另一个 ai_fill 作依据或循环推导。FAIL、uncertain、依据失效或分组冲突均暂不省图。省图后故事须可读、无歧义；结论仍是未验证建议，不保证未来生成复现。
 
 ## 完整性与内部结果
+
+submit／complete 已自动规划，不另调用。仅调试当前方案时使用 `python scripts/planner.py PROJECT.json --output AGGREGATION.json`。优化只针对结构约束下的参考图选择，不证明真实生成效果或全局视觉质量，也不新增模型或 API 调用。
 
 工具核对全部原镜按序各出现一次、每组约束、组内时长与全批总时长守恒、Beat 及连续性，输入模式与用户分组完全一致。aggregation.clipGroupList 保存内部结果：shotId、originClipIdList、totalDuration、assetIdList。资产取原镜绑定并集，按项目资产原序，不猜新资产。
 
